@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 import yfinance as yf
 from flask import Flask
@@ -11,8 +11,13 @@ cached_html = None
 last_update_time = 0
 CACHE_DURATION = 180
 
+def get_tw_time():
+    # 轉換為台灣時區 (UTC+8)
+    tz_tw = timezone(timedelta(hours=8))
+    return datetime.now(tz_tw).strftime("%Y-%m-%d %H:%M:%S")
+
 def build_dashboard():
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = get_tw_time()
     intraday_candidates = [
         "2330.TW", "2454.TW", "2382.TW", "2317.TW",
         "3017.TW", "3324.TWO", "3231.TW", "6669.TW",
@@ -148,7 +153,7 @@ def build_dashboard():
         <div class="header-box">
             <div>
                 <h1>📊 選股決策雷達 (雲端極速版)</h1>
-                <div class="sub">更新時間：{now_str}</div>
+                <div class="sub">更新時間 (台北)：{now_str}</div>
             </div>
             <div class="timer-box">🔄 3分鐘自動刷新</div>
         </div>
