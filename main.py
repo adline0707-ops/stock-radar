@@ -48,9 +48,14 @@ def get_tick_size(price):
 
 def calculate_scalp_plan(price, is_tw=True):
     if not is_tw:
-        target = round(price * 1.015, 2)
+        target1 = round(price * 1.015, 2)
+        target2 = round(price * 1.035, 2)
         stop = round(price * 0.99, 2)
-        return {"target": target, "stop": stop, "net_pnl": "約+1.5%", "ticks": 0}
+        return {
+            "target1": target1, "pnl1": "+1.5%", "ticks1": 0,
+            "target2": target2, "pnl2": "+3.5%",
+            "stop": stop
+        }
 
     tick = get_tick_size(price)
     shares = 1000
@@ -58,9 +63,10 @@ def calculate_scalp_plan(price, is_tw=True):
     fee_rate = 0.000855
     tax_rate = 0.0015
 
-    best_target = price + (tick * 3)
-    best_net = 0
-    best_ticks = 3
+    # 搜尋第一目標（保底淨利 1,000 ~ 1,800 元，跳 2 ~ 6 檔）
+    best_target1 = price + (tick * 3)
+    best_net1 = 0
+    best_ticks1 = 3
 
     for t in range(2, 7):
         target_p = price + (tick * t)
@@ -70,17 +76,31 @@ def calculate_scalp_plan(price, is_tw=True):
         tax = sell_amount * tax_rate
         net = sell_amount - buy_amount - (fee_buy + fee_sell + tax)
         if net >= 1000:
-            best_target = round(target_p, 2)
-            best_net = int(net)
-            best_ticks = t
+            best_target1 = round(target_p, 2)
+            best_net1 = int(net)
+            best_ticks1 = t
             break
 
-    stop_loss = round(price - (tick * max(2, best_ticks)), 2)
+    # 計算第二目標（波段拉大 +3.0% ~ +3.5%）
+    target2_raw = price * 1.032
+    # 對齊至最近的合法 tick
+    tick2 = get_tick_size(target2_raw)
+    target2 = round(round(target2_raw / tick2) * tick2, 2)
+    sell2_amount = target2 * shares
+    fee_buy = max(20, buy_amount * fee_rate)
+    fee_sell2 = max(20, sell2_amount * fee_rate)
+    tax2 = sell2_amount * tax_rate
+    net2 = int(sell2_amount - buy_amount - (fee_buy + fee_sell2 + tax2))
+
+    stop_loss = round(price - (tick * max(2, best_ticks1)), 2)
+
     return {
-        "target": best_target,
-        "stop": stop_loss,
-        "net_pnl": f"+{best_net:,}元" if best_net > 0 else "+1.2%",
-        "ticks": best_ticks
+        "target1": best_target1,
+        "pnl1": f"+{best_net1:,}元" if best_net1 > 0 else "+1.2%",
+        "ticks1": best_ticks1,
+        "target2": target2,
+        "pnl2": f"+{net2:,}元" if net2 > 0 else "+3.2%",
+        "stop": stop_loss
     }
 
 def send_telegram_msg(msg):
@@ -114,9 +134,8 @@ def build_dashboard():
     now_dt = get_tw_now()
     now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
     today_str = now_dt.strftime("%Y-%m-%d")
-    current_time_val = now_dt.hour * 100 + now_dt.minute  # 例: 09:15 -> 915
+    current_time_val = now_dt.hour * 100 + now_dt.minute
 
-    # 判斷是否處於當沖黃金時間窗 (09:05 ~ 10:15)
     is_golden_time = (905 <= current_time_val <= 1015)
     is_market_closed = (current_time_val >= 1335 or current_time_val < 900)
 
@@ -187,36 +206,35 @@ def build_dashboard():
                 is_tw = (".TW" in sym or ".TWO" in sym)
                 plan = calculate_scalp_plan(cur, is_tw=is_tw)
 
-                # 風控濾網計算
                 change_pct = ((cur - prev_c) / prev_c) * 100
-                pullback_from_high = ((hi - cur) / hi) * 100  # 從最高點拉回幅度
+                pullback_from_high = ((hi - cur) / hi) * 100
 
-                # 做多條件：站穩今開/昨收/均價線 + 漲幅未達+8.5% (防追死) + 高點拉回小於1.5% (防長上影出貨)
                 if (cur >= op) and (cur >= prev_c) and (cur >= vwap) and (change_pct < 8.5) and (pullback_from_high <= 1.5):
                     long_results.append({
                         "標的": make_link(sym),
                         "現價": round(cur, 2),
-                        "小賺目標價(1張)": f"<b>{plan['target']}</b> ({plan['net_pnl']})",
+                        "第一目標(保底小賺)": f"<b>{plan['target1']}</b> ({plan['pnl1']})",
+                        "第二目標(主力衝高)": f"<b style='color:#38bdf8;'>{plan['target2']}</b> ({plan['pnl2']})",
                         "嚴守停損": plan["stop"],
                         "5日振幅": f"{amp_5d:.1f}%",
                         "量能": f"{vol_ratio:.1f}x 均量" if vol_ratio > 1.2 else "常態量",
                         "訊號": "🔥 多方帶量攻"
                     })
-                    # 只有在黃金動能時間窗 (09:05 ~ 10:15) 且未推播過才發送 TG
                     if is_golden_time and (sym not in notified_today):
                         notified_today.add(sym)
                         msg = (
-                            f"⚡ <b>【當沖黃金動能訊號】</b>\n"
+                            f"⚡ <b>【當沖黃金雙目標訊號】</b>\n"
                             f"標的：<b>{stock_name} ({sym})</b>\n"
                             f"現價：<b>{cur:.2f}</b> (漲幅 {change_pct:+.2f}%)\n\n"
-                            f"🎯 <b>小賺目標價 (跳{plan['ticks']}檔)：{plan['target']}</b>\n"
-                            f"💵 預估淨賺：<b>{plan['net_pnl']}</b>\n"
-                            f"🛑 嚴守停損：<b>{plan['stop']}</b>\n\n"
-                            f"🛡️ 風控通過：高點拉回僅 {pullback_from_high:.1f}%，動能強勁！"
+                            f"🎯 <b>第一目標 (保底)：{plan['target1']}</b> ({plan['pnl1']}，跳{plan['ticks1']}檔)\n"
+                            f"🚀 <b>第二目標 (拉大)：{plan['target2']}</b> ({plan['pnl2']})\n"
+                            f"🛑 <b>嚴守停損：{plan['stop']}</b>\n\n"
+                            f"💡 <b>實戰建議：</b>\n"
+                            f"1. 達第一目標可先平倉落袋 1~2 千，或出半數部位。\n"
+                            f"2. 剩餘部位將停損移至成本價，零風險挑戰第二目標！"
                         )
                         send_telegram_msg(msg)
 
-                # 放空條件：低於今開/昨收/均價線 + 跌幅未超過-8.5% (防跌停補不回)
                 elif (cur < op) and (cur < prev_c) and (cur < vwap) and (change_pct > -8.5):
                     short_results.append({
                         "標的": make_link(sym),
@@ -285,9 +303,8 @@ def build_dashboard():
     table_pot = df_pot.to_html(index=False, escape=False) if not df_pot.empty else '<div class="empty">目前無符合低風險起漲點之潛力標的。</div>'
     table_etf = df_etf.to_html(index=False, escape=False) if not df_etf.empty else '<div class="empty">暫無數據。</div>'
 
-    # 時間窗提示橫幅
     if is_golden_time:
-        timing_banner = '<div style="background:#064e3b;border:1px solid #059669;padding:8px 12px;border-radius:8px;font-size:12px;color:#a7f3d0;margin-bottom:12px;">🔥 <b>黃金動能時段 (09:05-10:15)</b>：市場量能充沛，訊號主動推播中！</div>'
+        timing_banner = '<div style="background:#064e3b;border:1px solid #059669;padding:8px 12px;border-radius:8px;font-size:12px;color:#a7f3d0;margin-bottom:12px;">🔥 <b>黃金動能時段 (09:05-10:15)</b>：市場量能充沛，雙目標推播啟動！</div>'
     elif is_market_closed:
         timing_banner = '<div style="background:#1e293b;border:1px solid #334155;padding:8px 12px;border-radius:8px;font-size:12px;color:#94a3b8;margin-bottom:12px;">🌙 <b>台股已收盤/休市中</b>：數據已結算，可參考波段與 ETF 扣款區。</div>'
     else:
@@ -328,10 +345,10 @@ def build_dashboard():
     <div class="wrap">
         <div class="header-box">
             <div>
-                <h1>📊 選股決策雷達 (嚴格風控版)</h1>
+                <h1>📊 選股決策雷達 (雙目標進階版)</h1>
                 <div class="sub">更新時間 (台北)：{now_str}</div>
             </div>
-            <div class="timer-box">🔄 3分鐘自動刷新<br><span style="color:#10b981;">🛡️ 嚴格風控已啟用</span></div>
+            <div class="timer-box">🔄 3分鐘自動刷新<br><span style="color:#10b981;">🎯 雙目標動態試算已啟用</span></div>
         </div>
 
         {timing_banner}
@@ -343,8 +360,8 @@ def build_dashboard():
 
         <div class="card">
             <div class="card-header">
-                <span class="title">⚡ 1. 今日當沖：強勢做多（目標淨利 1,000~2,000元）</span>
-                <span class="badge badge-green">嚴格防追高 · 防長上影</span>
+                <span class="title">⚡ 1. 今日當沖：強勢做多（保底小賺 vs 主力波段）</span>
+                <span class="badge badge-green">保底+拉大雙機制</span>
             </div>
             <div class="table-wrap">{table_long}</div>
         </div>
@@ -387,7 +404,7 @@ def index():
     return cached_html
 
 try:
-    send_telegram_msg("🛡️ <b>【方案 A 嚴格風控系統已上線】</b>\n1. 啟用 09:05~10:15 黃金時間窗推播限制。\n2. 自動排除漲幅 > 8.5% 追高標的。\n3. 自動剔除高點拉回 > 1.5% 之出貨長上影線。")
+    send_telegram_msg("🚀 <b>【雙目標停利系統已上線】</b>\n🎯 第一目標：保底小賺 1,000~2,000 元（跳2~4檔）\n📈 第二目標：主力衝高拉大至 3,000~5,500 元（+3.2%）\n兼顧天天落袋與大行情獲利！")
 except Exception:
     pass
 
