@@ -111,7 +111,7 @@ def send_telegram_msg(msg, target_chat_id=None, show_keyboard=True):
 
         payload = urllib.parse.urlencode(params).encode("utf-8")
         req = urllib.request.Request(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data=payload)
-        urllib.request.urlopen(req, timeout=5)
+        urllib.request.urlopen(req, timeout=10)
     except Exception as e:
         print(f"TG 推播失敗: {e}")
 
@@ -181,9 +181,9 @@ def handle_query(query_type):
             except Exception: pass
         if hits:
             msg += "🎯 <b>【當前符合爆量起漲標的】</b>\n\n" + "\n".join(hits[:3])
-            msg += "\n💡 <i>操作心法：達標保底目標價即可平倉賺 1~2 千入袋，或移至保本讓利潤奔馳！</i>"
+            msg += "\n💡 <i>達標第一目標即可平倉保底 1~2 千，或移至保本讓利潤奔馳！</i>"
         else:
-            msg += "🛡️ <b>目前無符合嚴格當沖條件標的。</b>\n（無量或高點拉回過大，請耐心空手觀望，切忌盲目追高！）"
+            msg += "🛡️ <b>目前盤面無符合嚴格當沖條件標的。</b>\n（無量或回檔過大，請耐心空手觀望，切忌盲目追高！）"
         return msg
 
     # 2. 今天可以買什麼
@@ -287,12 +287,19 @@ def handle_query(query_type):
             except Exception: pass
         return msg
 
+# 背景監聽線程
 def telegram_listener():
+    # 啟動前先清除 Webhook，避免 409 Conflict
+    try:
+        del_url = f"https://api.telegram.org/bot{TG_TOKEN}/deleteWebhook"
+        urllib.request.urlopen(del_url, timeout=5)
+    except Exception: pass
+
     offset = 0
     while True:
         try:
-            url = f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates?offset={offset}&timeout=20"
-            req = urllib.request.urlopen(url, timeout=25)
+            url = f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates?offset={offset}&timeout=15"
+            req = urllib.request.urlopen(url, timeout=20)
             res = json.loads(req.read().decode("utf-8"))
             if res.get("ok"):
                 for item in res.get("result", []):
@@ -303,13 +310,12 @@ def telegram_listener():
 
                     if not text: continue
 
-                    # 4 大專屬選單路由
                     if "當沖" in text:
                         q_type = "scalp"
-                    elif "今天" in text:
-                        q_type = "today"
                     elif "明天" in text:
                         q_type = "tomorrow"
+                    elif "今天" in text:
+                        q_type = "today"
                     elif "美股" in text:
                         q_type = "us"
                     elif any(k in text for k in ["買什麼", "可以買", "推薦", "/buy", "/start"]):
@@ -317,11 +323,12 @@ def telegram_listener():
                     else:
                         continue
 
-                    send_telegram_msg("🔍 正在進行全盤數據掃描，請稍候 3 秒...", target_chat_id=chat_id, show_keyboard=False)
+                    send_telegram_msg("🔍 正在進行全盤量化掃描，請稍候 3 秒...", target_chat_id=chat_id, show_keyboard=False)
                     report = handle_query(q_type)
                     send_telegram_msg(report, target_chat_id=chat_id, show_keyboard=True)
-        except Exception: pass
-        time.sleep(2)
+        except Exception as e:
+            time.sleep(2)
+        time.sleep(1)
 
 @app.route("/")
 def index():
@@ -331,7 +338,7 @@ listener_thread = threading.Thread(target=telegram_listener, daemon=True)
 listener_thread.start()
 
 try:
-    send_telegram_msg("🎯 <b>【4 大選單快捷助理已上線】</b>\n已為你配置常駐按鈕，點擊下方選單即可秒查！", show_keyboard=True)
+    send_telegram_msg("🎯 <b>【專屬量化助理已就位】</b>\n已為你綁定專屬私密頻道，點擊下方快捷按鈕即可查詢！", show_keyboard=True)
 except Exception: pass
 
 if __name__ == "__main__":
