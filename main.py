@@ -9,11 +9,9 @@ from flask import Flask
 
 app = Flask(__name__)
 
-# Telegram 設定
 TG_TOKEN = "8681385226:AAFvzJ-3L86hWNj_DYr1VZTa4X9dRi8SCYM"
 TG_CHAT_ID = "8865457240"
 
-# 紀錄今日已推播之代號（避免重覆洗版）
 notified_today = set()
 last_notified_date = ""
 
@@ -33,6 +31,60 @@ NAME_MAP = {
     "AAPL": "蘋果 Apple", "MSFT": "微軟 Microsoft", "GOOGL": "谷歌 Alphabet",
     "AMZN": "亞馬遜 Amazon", "QCOM": "高通 Qualcomm", "AVGO": "博通 Broadcom"
 }
+
+def get_tick_size(price):
+    if price < 10:
+        return 0.01
+    elif price < 50:
+        return 0.05
+    elif price < 100:
+        return 0.1
+    elif price < 500:
+        return 0.5
+    elif price < 1000:
+        return 1.0
+    else:
+        return 5.0
+
+def calculate_scalp_plan(price, is_tw=True):
+    # 若為台股以 1 張 (1000股) 計算小賺 1000~2000 目標
+    if not is_tw:
+        target = round(price * 1.015, 2)
+        stop = round(price * 0.99, 2)
+        return {"target": target, "stop": stop, "net_pnl": "約+1.5%", "ticks": 0}
+
+    tick = get_tick_size(price)
+    shares = 1000
+    buy_amount = price * shares
+    # 手續費打6折: 0.1425% * 0.6 = 0.000855，當沖證交稅 0.15%
+    fee_rate = 0.000855
+    tax_rate = 0.0015
+
+    # 搜尋跳動 2 ~ 6 檔中淨利達標最接近 1200~1800 元的價格
+    best_target = price + (tick * 3)
+    best_net = 0
+    best_ticks = 3
+
+    for t in range(2, 7):
+        target_p = price + (tick * t)
+        sell_amount = target_p * shares
+        fee_buy = max(20, buy_amount * fee_rate)
+        fee_sell = max(20, sell_amount * fee_rate)
+        tax = sell_amount * tax_rate
+        net = sell_amount - buy_amount - (fee_buy + fee_sell + tax)
+        if net >= 1000:
+            best_target = round(target_p, 2)
+            best_net = int(net)
+            best_ticks = t
+            break
+
+    stop_loss = round(price - (tick * max(2, best_ticks)), 2)
+    return {
+        "target": best_target,
+        "stop": stop_loss,
+        "net_pnl": f"+{best_net:,}元" if best_net > 0 else "+1.2%",
+        "ticks": best_ticks
+    }
 
 def send_telegram_msg(msg):
     try:
@@ -66,7 +118,6 @@ def build_dashboard():
     now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
     today_str = now_dt.strftime("%Y-%m-%d")
 
-    # 每日跨日清空已推播紀錄
     if today_str != last_notified_date:
         notified_today = set()
         last_notified_date = today_str
@@ -105,10 +156,10 @@ def build_dashboard():
                 diff_str = f"{'+' if diff >= 0 else ''}{diff:.1f} ({'+' if diff >= 0 else ''}{diff_pct:.2f}%)"
                 if idx_cur >= idx_ma5:
                     market_badge = '<span class="badge badge-green">多方控盤 · 站上5日線</span>'
-                    market_text = f"加權指數：{idx_cur:.1f} ({diff_str}) ｜ 大盤強勢，多方勝率高。"
+                    market_text = f"加權指數：{idx_cur:.1f} ({diff_str}) ｜ 大盤強勢，當沖順勢好做。"
                 else:
                     market_badge = '<span class="badge badge-red">空方震盪 · 跌破5日線</span>'
-                    market_text = f"加權指數：{idx_cur:.1f} ({diff_str}) ｜ 盤勢偏弱，注意回檔風險或參考放空避險！"
+                    market_text = f"加權指數：{idx_cur:.1f} ({diff_str}) ｜ 大盤偏弱，小賺即跑，嚴控停損！"
         except Exception:
             pass
 
@@ -130,37 +181,39 @@ def build_dashboard():
                 vol_ratio = (today_row["Volume"] / df["Volume"].rolling(5).mean().iloc[-2]) if ("Volume" in today_row and df["Volume"].rolling(5).mean().iloc[-2] > 0) else 1.0
 
                 stock_name = NAME_MAP.get(sym, sym)
+                is_tw = (".TW" in sym or ".TWO" in sym)
+                plan = calculate_scalp_plan(cur, is_tw=is_tw)
 
                 # 做多條件
                 if (cur >= op) and (cur >= prev_c) and (cur >= vwap):
                     long_results.append({
                         "標的": make_link(sym),
                         "現價": round(cur, 2),
-                        "停損(-1%)": round(cur * 0.99, 2),
-                        "目標(+2%)": round(cur * 1.02, 2),
+                        "小賺目標價(1張)": f"<b>{plan['target']}</b> ({plan['net_pnl']})",
+                        "嚴守停損": plan["stop"],
                         "5日振幅": f"{amp_5d:.1f}%",
-                        "量能評估": f"{vol_ratio:.1f}x 均量" if vol_ratio > 1.2 else "常態量",
+                        "量能": f"{vol_ratio:.1f}x 均量" if vol_ratio > 1.2 else "常態量",
                         "訊號": "🔥 多方帶量攻"
                     })
-                    # 盤中推播通知（當日未推播過）
                     if sym not in notified_today:
                         notified_today.add(sym)
                         msg = (
-                            f"🚨 <b>【當沖多方訊號觸發】</b>\n"
+                            f"🚨 <b>【當沖小賺訊號觸發】</b>\n"
                             f"標的：<b>{stock_name} ({sym})</b>\n"
-                            f"現價：<b>{cur:.2f}</b>\n"
-                            f"停損價 (-1%)：{cur * 0.99:.2f}\n"
-                            f"目標價 (+2%)：{cur * 1.02:.2f}\n"
-                            f"狀態：站上今開/均價線 (5日振幅 {amp_5d:.1f}%)"
+                            f"現價：<b>{cur:.2f}</b>\n\n"
+                            f"🎯 <b>小賺目標價 (跳{plan['ticks']}檔)：{plan['target']}</b>\n"
+                            f"💵 預估扣稅費淨賺：<b>{plan['net_pnl']}</b>\n"
+                            f"🛑 嚴守停損價：<b>{plan['stop']}</b>\n\n"
+                            f"💡 紀律提醒：達到目標價立刻平倉獲利，達標即收工，不貪刀！"
                         )
                         send_telegram_msg(msg)
 
-                # 放空條件
+                # 放空/避險
                 elif (cur < op) and (cur < prev_c) and (cur < vwap):
                     short_results.append({
                         "標的": make_link(sym),
                         "現價": round(cur, 2),
-                        "反彈壓力(停損+1%)": round(cur * 1.01, 2),
+                        "反彈壓力(停損)": round(cur * 1.01, 2),
                         "下殺目標(-2%)": round(cur * 0.98, 2),
                         "5日振幅": f"{amp_5d:.1f}%",
                         "訊號": "⚠️ 弱勢破線走跌"
@@ -259,10 +312,10 @@ def build_dashboard():
     <div class="wrap">
         <div class="header-box">
             <div>
-                <h1>📊 選股決策雷達 (專業全功能版)</h1>
+                <h1>📊 選股決策雷達 (當沖小賺利刃版)</h1>
                 <div class="sub">更新時間 (台北)：{now_str}</div>
             </div>
-            <div class="timer-box">🔄 3分鐘自動刷新<br><span style="color:#10b981;">⚡ TG即時推播已連線</span></div>
+            <div class="timer-box">🔄 3分鐘自動刷新<br><span style="color:#10b981;">⚡ TG即時推播監控中</span></div>
         </div>
 
         <div class="market-banner">
@@ -272,8 +325,8 @@ def build_dashboard():
 
         <div class="card">
             <div class="card-header">
-                <span class="title">⚡ 1. 今日當沖：強勢做多標的</span>
-                <span class="badge badge-green">量能爆發 · 均價線上</span>
+                <span class="title">⚡ 1. 今日當沖：強勢做多（目標淨利 1,000~2,000元）</span>
+                <span class="badge badge-green">吃 2~4 檔跳動即收工</span>
             </div>
             <div class="table-wrap">{table_long}</div>
         </div>
@@ -281,7 +334,7 @@ def build_dashboard():
         <div class="card">
             <div class="card-header">
                 <span class="title">⚠️ 2. 弱勢避險 / 放空參考標的</span>
-                <span class="badge badge-red">開低走低 · 破昨收均價</span>
+                <span class="badge badge-red">破今開均價線</span>
             </div>
             <div class="table-wrap">{table_short}</div>
         </div>
@@ -315,9 +368,8 @@ def index():
         last_update_time = now
     return cached_html
 
-# 啟動時發送連線測試推播
 try:
-    send_telegram_msg("🚀 <b>【選股決策雷達】</b> 雲端即時監控與 Telegram 推播系統已啟動！")
+    send_telegram_msg("🎯 <b>【當沖小賺利刃版已上線】</b>\n已啟用台股跳動檔位 (Tick) 成本試算！盤中觸發訊號時，將自動推播『跳動檔數』與『淨利 1,000~2,000 元目標出場價』。")
 except Exception:
     pass
 
