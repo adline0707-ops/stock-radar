@@ -47,7 +47,6 @@ def get_tick_size(price):
         return 5.0
 
 def calculate_scalp_plan(price, is_tw=True):
-    # 若為台股以 1 張 (1000股) 計算小賺 1000~2000 目標
     if not is_tw:
         target = round(price * 1.015, 2)
         stop = round(price * 0.99, 2)
@@ -56,11 +55,9 @@ def calculate_scalp_plan(price, is_tw=True):
     tick = get_tick_size(price)
     shares = 1000
     buy_amount = price * shares
-    # 手續費打6折: 0.1425% * 0.6 = 0.000855，當沖證交稅 0.15%
     fee_rate = 0.000855
     tax_rate = 0.0015
 
-    # 搜尋跳動 2 ~ 6 檔中淨利達標最接近 1200~1800 元的價格
     best_target = price + (tick * 3)
     best_net = 0
     best_ticks = 3
@@ -117,6 +114,11 @@ def build_dashboard():
     now_dt = get_tw_now()
     now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
     today_str = now_dt.strftime("%Y-%m-%d")
+    current_time_val = now_dt.hour * 100 + now_dt.minute  # 例: 09:15 -> 915
+
+    # 判斷是否處於當沖黃金時間窗 (09:05 ~ 10:15)
+    is_golden_time = (905 <= current_time_val <= 1015)
+    is_market_closed = (current_time_val >= 1335 or current_time_val < 900)
 
     if today_str != last_notified_date:
         notified_today = set()
@@ -156,7 +158,7 @@ def build_dashboard():
                 diff_str = f"{'+' if diff >= 0 else ''}{diff:.1f} ({'+' if diff >= 0 else ''}{diff_pct:.2f}%)"
                 if idx_cur >= idx_ma5:
                     market_badge = '<span class="badge badge-green">多方控盤 · 站上5日線</span>'
-                    market_text = f"加權指數：{idx_cur:.1f} ({diff_str}) ｜ 大盤強勢，當沖順勢好做。"
+                    market_text = f"加權指數：{idx_cur:.1f} ({diff_str}) ｜ 大盤強勢，順勢操作。"
                 else:
                     market_badge = '<span class="badge badge-red">空方震盪 · 跌破5日線</span>'
                     market_text = f"加權指數：{idx_cur:.1f} ({diff_str}) ｜ 大盤偏弱，小賺即跑，嚴控停損！"
@@ -175,6 +177,7 @@ def build_dashboard():
                 prev_row = df.iloc[-2]
                 cur = today_row["Close"]
                 op = today_row["Open"]
+                hi = today_row["High"]
                 prev_c = prev_row["Close"]
                 amp_5d = (((df["High"] - df["Low"]) / df["Close"]) * 100).rolling(5).mean().iloc[-1]
                 vwap = (today_row["High"] + today_row["Low"] + today_row["Close"]) / 3
@@ -184,8 +187,12 @@ def build_dashboard():
                 is_tw = (".TW" in sym or ".TWO" in sym)
                 plan = calculate_scalp_plan(cur, is_tw=is_tw)
 
-                # 做多條件
-                if (cur >= op) and (cur >= prev_c) and (cur >= vwap):
+                # 風控濾網計算
+                change_pct = ((cur - prev_c) / prev_c) * 100
+                pullback_from_high = ((hi - cur) / hi) * 100  # 從最高點拉回幅度
+
+                # 做多條件：站穩今開/昨收/均價線 + 漲幅未達+8.5% (防追死) + 高點拉回小於1.5% (防長上影出貨)
+                if (cur >= op) and (cur >= prev_c) and (cur >= vwap) and (change_pct < 8.5) and (pullback_from_high <= 1.5):
                     long_results.append({
                         "標的": make_link(sym),
                         "現價": round(cur, 2),
@@ -195,21 +202,22 @@ def build_dashboard():
                         "量能": f"{vol_ratio:.1f}x 均量" if vol_ratio > 1.2 else "常態量",
                         "訊號": "🔥 多方帶量攻"
                     })
-                    if sym not in notified_today:
+                    # 只有在黃金動能時間窗 (09:05 ~ 10:15) 且未推播過才發送 TG
+                    if is_golden_time and (sym not in notified_today):
                         notified_today.add(sym)
                         msg = (
-                            f"🚨 <b>【當沖小賺訊號觸發】</b>\n"
+                            f"⚡ <b>【當沖黃金動能訊號】</b>\n"
                             f"標的：<b>{stock_name} ({sym})</b>\n"
-                            f"現價：<b>{cur:.2f}</b>\n\n"
+                            f"現價：<b>{cur:.2f}</b> (漲幅 {change_pct:+.2f}%)\n\n"
                             f"🎯 <b>小賺目標價 (跳{plan['ticks']}檔)：{plan['target']}</b>\n"
-                            f"💵 預估扣稅費淨賺：<b>{plan['net_pnl']}</b>\n"
-                            f"🛑 嚴守停損價：<b>{plan['stop']}</b>\n\n"
-                            f"💡 紀律提醒：達到目標價立刻平倉獲利，達標即收工，不貪刀！"
+                            f"💵 預估淨賺：<b>{plan['net_pnl']}</b>\n"
+                            f"🛑 嚴守停損：<b>{plan['stop']}</b>\n\n"
+                            f"🛡️ 風控通過：高點拉回僅 {pullback_from_high:.1f}%，動能強勁！"
                         )
                         send_telegram_msg(msg)
 
-                # 放空/避險
-                elif (cur < op) and (cur < prev_c) and (cur < vwap):
+                # 放空條件：低於今開/昨收/均價線 + 跌幅未超過-8.5% (防跌停補不回)
+                elif (cur < op) and (cur < prev_c) and (cur < vwap) and (change_pct > -8.5):
                     short_results.append({
                         "標的": make_link(sym),
                         "現價": round(cur, 2),
@@ -277,6 +285,14 @@ def build_dashboard():
     table_pot = df_pot.to_html(index=False, escape=False) if not df_pot.empty else '<div class="empty">目前無符合低風險起漲點之潛力標的。</div>'
     table_etf = df_etf.to_html(index=False, escape=False) if not df_etf.empty else '<div class="empty">暫無數據。</div>'
 
+    # 時間窗提示橫幅
+    if is_golden_time:
+        timing_banner = '<div style="background:#064e3b;border:1px solid #059669;padding:8px 12px;border-radius:8px;font-size:12px;color:#a7f3d0;margin-bottom:12px;">🔥 <b>黃金動能時段 (09:05-10:15)</b>：市場量能充沛，訊號主動推播中！</div>'
+    elif is_market_closed:
+        timing_banner = '<div style="background:#1e293b;border:1px solid #334155;padding:8px 12px;border-radius:8px;font-size:12px;color:#94a3b8;margin-bottom:12px;">🌙 <b>台股已收盤/休市中</b>：數據已結算，可參考波段與 ETF 扣款區。</div>'
+    else:
+        timing_banner = '<div style="background:#78350f;border:1px solid #d97706;padding:8px 12px;border-radius:8px;font-size:12px;color:#fde68a;margin-bottom:12px;">⏳ <b>已過黃金動能期 (10:15後)</b>：盤勢易量縮洗刷，關閉當沖推播，建議停止新開倉！</div>'
+
     html = f"""<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -291,7 +307,7 @@ def build_dashboard():
         h1 {{ color: #38bdf8; font-size: 20px; margin: 0 0 4px 0; }}
         .sub {{ color: #94a3b8; font-size: 12px; }}
         .timer-box {{ background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 6px 10px; font-size: 11px; color: #38bdf8; text-align: right; }}
-        .market-banner {{ background: #1a2234; border: 1px solid #334155; border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }}
+        .market-banner {{ background: #1a2234; border: 1px solid #334155; border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }}
         .card {{ background: #1e293b; border-radius: 12px; padding: 14px; margin-bottom: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }}
         .card-header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 8px; margin-bottom: 10px; }}
         .title {{ font-size: 15px; font-weight: bold; }}
@@ -312,11 +328,13 @@ def build_dashboard():
     <div class="wrap">
         <div class="header-box">
             <div>
-                <h1>📊 選股決策雷達 (當沖小賺利刃版)</h1>
+                <h1>📊 選股決策雷達 (嚴格風控版)</h1>
                 <div class="sub">更新時間 (台北)：{now_str}</div>
             </div>
-            <div class="timer-box">🔄 3分鐘自動刷新<br><span style="color:#10b981;">⚡ TG即時推播監控中</span></div>
+            <div class="timer-box">🔄 3分鐘自動刷新<br><span style="color:#10b981;">🛡️ 嚴格風控已啟用</span></div>
         </div>
+
+        {timing_banner}
 
         <div class="market-banner">
             <div>🧭 <strong>大盤風向球：</strong> {market_text}</div>
@@ -326,7 +344,7 @@ def build_dashboard():
         <div class="card">
             <div class="card-header">
                 <span class="title">⚡ 1. 今日當沖：強勢做多（目標淨利 1,000~2,000元）</span>
-                <span class="badge badge-green">吃 2~4 檔跳動即收工</span>
+                <span class="badge badge-green">嚴格防追高 · 防長上影</span>
             </div>
             <div class="table-wrap">{table_long}</div>
         </div>
@@ -369,7 +387,7 @@ def index():
     return cached_html
 
 try:
-    send_telegram_msg("🎯 <b>【當沖小賺利刃版已上線】</b>\n已啟用台股跳動檔位 (Tick) 成本試算！盤中觸發訊號時，將自動推播『跳動檔數』與『淨利 1,000~2,000 元目標出場價』。")
+    send_telegram_msg("🛡️ <b>【方案 A 嚴格風控系統已上線】</b>\n1. 啟用 09:05~10:15 黃金時間窗推播限制。\n2. 自動排除漲幅 > 8.5% 追高標的。\n3. 自動剔除高點拉回 > 1.5% 之出貨長上影線。")
 except Exception:
     pass
 
