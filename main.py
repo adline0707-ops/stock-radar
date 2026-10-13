@@ -8,27 +8,26 @@ from flask import Flask
 
 app = Flask(__name__)
 
-# 全域快取 HTML
-cached_html = "<h1>系統正在首次啟動與抓取數據，請稍候 10 秒後重新整理...</h1>"
+cached_html = "<h1>系統正在抓取數據，請稍候約 5 秒後重新整理...</h1>"
 
 def fetch_and_generate():
     global cached_html
     while True:
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # 修正上櫃股票為 .TWO
             intraday_candidates = [
                 "2330.TW", "2454.TW", "2382.TW", "2317.TW",
-                "3017.TW", "3324.TW", "3231.TW", "6669.TW",
-                "6442.TW", "3163.TW", "4979.TW",
+                "3017.TW", "3324.TWO", "3231.TW", "6669.TW",
+                "6442.TW", "3163.TWO", "4979.TWO",
                 "NVDA", "TSLA", "AMD", "PLTR"
             ]
             etf_pool = ["0050.TW", "006208.TW", "00713.TW", "00878.TW", "VOO", "QQQ"]
-            potential_pool = ["2330.TW", "2454.TW", "2303.TW", "2382.TW", "IBM", "TXN", "CSCO"]
 
-            all_syms = list(set(intraday_candidates + etf_pool + potential_pool))
+            all_syms = list(set(intraday_candidates + etf_pool))
             data = yf.download(all_syms, period="3mo", group_by="ticker", auto_adjust=True, threads=True)
 
-            # 1. 當沖候選 (只挑綠燈)
+            # 1. 當沖候選 (僅保留綠燈做多訊號)
             intraday_results = []
             if data is not None:
                 for sym in intraday_candidates:
@@ -56,7 +55,7 @@ def fetch_and_generate():
                     except Exception:
                         continue
 
-            # 2. ETF 均線
+            # 2. ETF 均線監控
             etf_results = []
             if data is not None:
                 for sym in etf_pool:
@@ -76,34 +75,11 @@ def fetch_and_generate():
                     except Exception:
                         continue
 
-            # 3. 潛力股
-            pot_results = []
-            for sym in potential_pool[:4]:
-                try:
-                    t = yf.Ticker(sym)
-                    info = t.info
-                    dy = info.get("dividendYield", 0) or 0
-                    pb = info.get("priceToBook", 99) or 99
-                    roe = info.get("returnOnEquity", 0) or 0
-                    cur = info.get("currentPrice", 0) or info.get("regularMarketPrice", 0)
-                    if dy >= 0.04 and pb <= 2.5 and roe >= 0.10:
-                        pot_results.append({
-                            "代號": sym,
-                            "名稱": info.get("shortName", sym),
-                            "現價": round(cur, 2),
-                            "殖利率": f"{round(dy*100, 2)}%",
-                            "PB": round(pb, 2)
-                        })
-                except Exception:
-                    continue
-
             df_intra = pd.DataFrame(intraday_results)
             df_etf = pd.DataFrame(etf_results)
-            df_pot = pd.DataFrame(pot_results)
 
-            table_intra = df_intra.to_html(index=False) if not df_intra.empty else '<div class="empty">🛡️ 目前無符合做多訊號之標的，空手觀望防守。</div>'
+            table_intra = df_intra.to_html(index=False) if not df_intra.empty else '<div class="empty">🛡️ 目前市場弱勢，所有觀察標的皆開低走弱，無符合做多訊號（嚴禁進場）。</div>'
             table_etf = df_etf.to_html(index=False) if not df_etf.empty else '<div class="empty">暫無數據。</div>'
-            table_pot = df_pot.to_html(index=False) if not df_pot.empty else '<div class="empty">暫無符合標的。</div>'
 
             html = """<!DOCTYPE html>
 <html lang="zh-TW">
@@ -156,32 +132,23 @@ def fetch_and_generate():
             </div>
             <div class="table-wrap">__TABLE_ETF__</div>
         </div>
-        <div class="card">
-            <div class="card-header">
-                <span class="title">🎯 3. 潛力價值成長股</span>
-                <span class="badge badge-green">基本面指標</span>
-            </div>
-            <div class="table-wrap">__TABLE_POT__</div>
-        </div>
     </div>
 </body>
 </html>"""
             html = html.replace("__TIME__", now_str)
             html = html.replace("__TABLE_INTRA__", table_intra)
             html = html.replace("__TABLE_ETF__", table_etf)
-            html = html.replace("__TABLE_POT__", table_pot)
             cached_html = html
         except Exception as e:
             print(f"背景更新錯誤: {e}")
         
-        # 雲端背景每 180 秒（3 分鐘）自動更新一次
         time.sleep(180)
 
 @app.route("/")
 def index():
     return cached_html
 
-# 啟動背景更新執行緒
+# 啟動後立即在背景開始更新
 t = threading.Thread(target=fetch_and_generate, daemon=True)
 t.start()
 
