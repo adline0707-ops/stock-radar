@@ -11,7 +11,8 @@ from flask import Flask
 
 app = Flask(__name__)
 
-TG_TOKEN = "8681385226:AAFvzJ-3L86hWNj_DYr1VZTa4X9dRi8SCYM"
+# 全新安全金鑰
+TG_TOKEN = "8681385226:AAG_1drAsJU3RDmF__jZ0Eblx8LI1eBvrOw"
 TG_CHAT_ID = "8865457240"
 
 notified_today = set()
@@ -287,11 +288,10 @@ def handle_query(query_type):
             except Exception: pass
         return msg
 
-# 背景監聽線程
 def telegram_listener():
-    # 啟動前先清除 Webhook，避免 409 Conflict
+    # 強制清空所有殘留 Webhook 與廣告轉發通道
     try:
-        del_url = f"https://api.telegram.org/bot{TG_TOKEN}/deleteWebhook"
+        del_url = f"https://api.telegram.org/bot{TG_TOKEN}/deleteWebhook?drop_pending_updates=True"
         urllib.request.urlopen(del_url, timeout=5)
     except Exception: pass
 
@@ -326,7 +326,7 @@ def telegram_listener():
                     send_telegram_msg("🔍 正在進行全盤量化掃描，請稍候 3 秒...", target_chat_id=chat_id, show_keyboard=False)
                     report = handle_query(q_type)
                     send_telegram_msg(report, target_chat_id=chat_id, show_keyboard=True)
-        except Exception as e:
+        except Exception:
             time.sleep(2)
         time.sleep(1)
 
@@ -338,7 +338,7 @@ listener_thread = threading.Thread(target=telegram_listener, daemon=True)
 listener_thread.start()
 
 try:
-    send_telegram_msg("🎯 <b>【專屬量化助理已就位】</b>\n已為你綁定專屬私密頻道，點擊下方快捷按鈕即可查詢！", show_keyboard=True)
+    send_telegram_msg("🛡️ <b>【全新乾淨金鑰已啟用】</b>\n已強制清空所有外部惡意轉發！請點擊下方按鈕測試：", show_keyboard=True)
 except Exception: pass
 
 if __name__ == "__main__":
