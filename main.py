@@ -22,30 +22,36 @@ cached_html = None
 last_update_time = 0
 CACHE_DURATION = 180
 
-# 擴充之中英文代號庫
 NAME_MAP = {
-    "3013.TW": "晟銘電", "6117.TW": "迎廣", "3450.TW": "聯鈞", "3163.TWO": "波若威",
-    "4979.TWO": "華星光", "3234.TWO": "光環", "2359.TW": "所羅門", "6188.TWO": "廣明",
-    "1513.TW": "中興電", "1514.TW": "亞力", "2449.TW": "京元電", "3231.TW": "緯創",
-    "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海", "2356.TW": "英業達",
-    "2376.TW": "技嘉", "2357.TW": "華碩", "2301.TW": "光寶科", "2383.TW": "台光電",
-    "3037.TW": "欣興", "2368.TW": "金像電", "8039.TW": "台虹", "2374.TW": "佳能",
-    "4583.TW": "台灣精銳", "2486.TW": "一詮", "3376.TW": "新日興", "6442.TW": "光聖",
-    "8054.TWO": "安國", "3661.TW": "世芯-KY", "3443.TW": "創意", "3017.TW": "奇鋐",
+    # CPO 光通訊
+    "3450.TW": "聯鈞", "6442.TW": "光聖", "3163.TWO": "波若威", "4979.TWO": "華星光", "3234.TWO": "光環",
+    # 散熱/機殼
+    "3017.TW": "奇鋐", "3324.TWO": "雙鴻", "3013.TW": "晟銘電", "6117.TW": "迎廣", "2354.TW": "鴻準",
+    # 先進封裝/機器人/重電
+    "2449.TW": "京元電", "3711.TW": "日月光投控", "6187.TWO": "萬潤", "2359.TW": "所羅門", "6188.TWO": "廣明",
+    "1513.TW": "中興電", "1514.TW": "亞力", "3231.TW": "緯創",
+    # 航運
+    "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海",
+    # 權值與指數
     "2330.TW": "台積電", "2454.TW": "聯發科", "2382.TW": "廣達", "2317.TW": "鴻海",
-    "0050.TW": "元大台灣50", "006208.TW": "富邦台50", "00713.TW": "元大高息低波",
-    "00878.TW": "國泰永續高股息", "VOO": "Vanguard標普500", "QQQ": "Invesco那斯達克",
+    "0050.TW": "元大台灣50", "006208.TW": "富邦台50", "00713.TW": "元大高息低波", "00878.TW": "國泰永續高股息",
+    "VOO": "Vanguard標普500", "QQQ": "Invesco那斯達克",
     "NVDA": "輝達 NVIDIA", "TSLA": "特斯拉 Tesla", "AMD": "超微 AMD", "PLTR": "Palantir",
     "AAPL": "蘋果 Apple", "MSFT": "微軟 Microsoft", "GOOGL": "谷歌 Alphabet"
 }
 
-# 基礎大池（涵蓋近半年前 50 名高人氣週轉標的）
+# 核心熱門族群分類結構
+THEMES = {
+    "⚡ CPO 矽光子 / 光通訊": ["3450.TW", "6442.TW", "3163.TWO", "4979.TWO", "3234.TWO"],
+    "❄️ AI 伺服器散熱 / 水冷機殼": ["3017.TW", "3324.TWO", "3013.TW", "6117.TW", "2354.TW"],
+    "🔬 CoWoS 封測 / AI機器人": ["2449.TW", "3711.TW", "6187.TWO", "2359.TW", "6188.TWO"],
+    "🚢 航運防禦 / 高殖利率": ["2603.TW", "2609.TW", "2615.TW"]
+}
+
 UNIVERSE_CANDIDATES = [
     "3013.TW", "6117.TW", "3450.TW", "3163.TWO", "4979.TWO", "3234.TWO",
     "2359.TW", "6188.TWO", "1513.TW", "1514.TW", "2449.TW", "3231.TW",
-    "2603.TW", "2609.TW", "2615.TW", "2356.TW", "2376.TW", "2301.TW",
-    "3037.TW", "2368.TW", "8039.TW", "2374.TW", "2486.TW", "3376.TW",
-    "8054.TWO"
+    "2603.TW", "2609.TW", "2615.TW", "2354.TW", "6187.TWO", "6442.TW"
 ]
 
 def get_tick_size(price):
@@ -135,32 +141,31 @@ def get_tw_now():
 
 def scan_market_data():
     tw_etf = ["0050.TW", "006208.TW", "00713.TW", "00878.TW"]
-    tw_potential = ["2330.TW", "2454.TW", "2382.TW", "2317.TW", "3017.TW", "2603.TW", "2881.TW", "2882.TW"]
+    tw_potential = ["2330.TW", "2454.TW", "2382.TW", "2317.TW", "3017.TW", "2603.TW", "3450.TW"]
     us_stocks = ["NVDA", "TSLA", "AMD", "PLTR", "AAPL", "MSFT", "GOOGL", "VOO", "QQQ"]
     indices = ["^TWII", "^GSPC"]
 
-    all_syms = list(set(UNIVERSE_CANDIDATES + tw_etf + tw_potential + us_stocks + indices))
+    # 包含所有族群標的
+    all_theme_stocks = [s for sublist in THEMES.values() for s in sublist]
+    all_syms = list(set(UNIVERSE_CANDIDATES + all_theme_stocks + tw_etf + tw_potential + us_stocks + indices))
     try:
         data = yf.download(all_syms, period="3mo", group_by="ticker", auto_adjust=True, threads=True)
     except Exception:
         data = None
 
-    # 動態成交金額篩選：只抓 30元 <= 現價 <= 200元 (一張20萬以下) 且依成交額排序
     dynamic_intraday = []
     if data is not None:
         ranked_list = []
-        for sym in UNIVERSE_CANDIDATES:
+        for sym in list(set(UNIVERSE_CANDIDATES + all_theme_stocks)):
             try:
                 df = data[sym].dropna()
                 if len(df) < 2: continue
                 c = df["Close"].iloc[-1]
                 vol = df["Volume"].iloc[-1]
-                # 嚴格價格濾網：一張 20 萬以內 (股價 <= 200) 且不低於 30 元
                 if 30.0 <= c <= 200.0:
-                    turnover = c * vol # 當日成交金額概算
+                    turnover = c * vol
                     ranked_list.append((sym, turnover))
             except Exception: pass
-        # 取成交金額前 15 名作為今日黃金當沖池
         ranked_list.sort(key=lambda x: x[1], reverse=True)
         dynamic_intraday = [item[0] for item in ranked_list[:15]]
 
@@ -185,7 +190,7 @@ def check_single_stock(query):
     try:
         df = yf.download(target_sym, period="3mo", auto_adjust=True)
         if df.empty or len(df) < 5:
-            return f"❌ 找不到代號 <b>{query}</b> 的即時行情，請確認代號是否正確（例如：3013、聯鈞、NVDA）。"
+            return f"❌ 找不到代號 <b>{query}</b> 的即時行情，請確認代號是否正確（例如：3450、聯鈞、NVDA）。"
 
         cur = df["Close"].iloc[-1].item() if hasattr(df["Close"].iloc[-1], "item") else float(df["Close"].iloc[-1])
         op = df["Open"].iloc[-1].item() if hasattr(df["Open"].iloc[-1], "item") else float(df["Open"].iloc[-1])
@@ -256,7 +261,6 @@ def handle_query(query_type):
                 pullback = ((hi - cur) / hi) * 100
                 chg = ((cur - prev_c) / prev_c) * 100
 
-                # 價格嚴格壓在 200 元以下 (一張20萬內)，且符合突破動能
                 if (cur <= 200.0) and (cur >= op) and (cur >= prev_c) and (cur >= vwap) and (chg < 8.5) and (pullback <= 1.5):
                     name = NAME_MAP.get(sym, sym)
                     plan = calculate_scalp_plan(cur, is_tw=True)
@@ -406,7 +410,7 @@ def telegram_listener():
                     if not text: continue
 
                     if "當沖" in text:
-                        send_telegram_msg("🔍 正在自動挑選成交額最高、20萬以內熱門當沖股...", target_chat_id=chat_id, show_keyboard=False)
+                        send_telegram_msg("🔍 正在挑選 20 萬以內熱門當沖標的...", target_chat_id=chat_id, show_keyboard=False)
                         report = handle_query("scalp")
                         send_telegram_msg(report, target_chat_id=chat_id, show_keyboard=True)
                     elif "明天" in text:
@@ -445,6 +449,7 @@ def build_dashboard():
 
     data, tw_intraday, tw_etf, tw_potential, us_stocks = scan_market_data()
 
+    # 1. 大盤風向球
     market_badge = '<span class="badge badge-amber">數據更新中</span>'
     market_text = "加權指數監控中..."
     if data is not None and "^TWII" in data.columns.levels[0]:
@@ -465,6 +470,51 @@ def build_dashboard():
                     market_text = f"加權指數：<b>{idx_cur:.1f}</b> (<span style='color:#10b981;'>{diff_str}</span>) ｜ 大盤偏弱，小賺即跑，嚴控停損！"
         except Exception: pass
 
+    # 2. 熱門族群強度卡片 (新增功能)
+    theme_cards_html = ""
+    if data is not None:
+        theme_summary = []
+        for theme_name, sym_list in THEMES.items():
+            chg_list = []
+            valid_stocks = []
+            for sym in sym_list:
+                try:
+                    df = data[sym].dropna()
+                    if len(df) < 2: continue
+                    c = df["Close"].iloc[-1]
+                    p_c = df["Close"].iloc[-2]
+                    chg = ((c - p_c) / p_c) * 100
+                    chg_list.append(chg)
+                    c_code = sym.split('.')[0]
+                    sname = NAME_MAP.get(sym, c_code)
+                    color = "#ef4444" if chg >= 0 else "#10b981"
+                    valid_stocks.append(f"<a href='https://tw.stock.yahoo.com/quote/{c_code}' target='_blank' style='color:#f8fafc;text-decoration:none;'>{sname} <span style='color:{color};font-size:11px;'>{chg:+.1f}%</span></a>")
+                except Exception: pass
+            
+            if chg_list:
+                avg_chg = sum(chg_list) / len(chg_list)
+                theme_summary.append({
+                    "name": theme_name,
+                    "avg_chg": avg_chg,
+                    "stocks_html": " ｜ ".join(valid_stocks)
+                })
+
+        # 依平均漲幅由大到小排序
+        theme_summary.sort(key=lambda x: x["avg_chg"], reverse=True)
+
+        for t in theme_summary:
+            avg_color = "#ef4444" if t["avg_chg"] >= 0 else "#10b981"
+            theme_cards_html += f"""
+            <div style="background:#1a253c;border:1px solid #334155;border-radius:8px;padding:10px 12px;margin-bottom:8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                    <span style="font-weight:700;font-size:14px;color:#38bdf8;">{t['name']}</span>
+                    <span style="font-size:13px;font-weight:700;color:{avg_color};">平均 {t['avg_chg']:+.2f}%</span>
+                </div>
+                <div style="font-size:12px;color:#94a3b8;line-height:1.6;">{t['stocks_html']}</div>
+            </div>
+            """
+
+    # 3. 當沖列表 (1張20萬以內)
     long_results = []
     short_results = []
     if data is not None:
@@ -489,7 +539,6 @@ def build_dashboard():
 
                 change_pct = ((cur - prev_c) / prev_c) * 100
                 pullback_from_high = ((hi - cur) / hi) * 100
-
                 target_copy_btn = f"<button class='copy-btn' onclick=\"copyVal('{plan['target1']}')\">{plan['target1']} 📋</button>"
 
                 if (cur <= 200.0) and (cur >= op) and (cur >= prev_c) and (cur >= vwap) and (change_pct < 8.5) and (pullback_from_high <= 1.5):
@@ -526,6 +575,7 @@ def build_dashboard():
                     })
             except Exception: pass
 
+    # 4. 波段潛力
     potential_results = []
     if data is not None:
         all_pot_candidates = tw_potential + [s for s in us_stocks if not s.startswith("^")]
@@ -554,6 +604,7 @@ def build_dashboard():
                     })
             except Exception: pass
 
+    # 5. ETF 監控
     etf_results = []
     if data is not None:
         all_etfs = tw_etf + ["VOO", "QQQ"]
@@ -567,7 +618,6 @@ def build_dashboard():
                 sname = NAME_MAP.get(sym, sym)
                 clean_s = sym.split('.')[0]
                 link_url = f"https://tw.stock.yahoo.com/quote/{clean_s}" if (".TW" in sym or ".TWO" in sym) else f"https://finance.yahoo.com/quote/{sym}"
-                
                 signal = "<span style='color:#94a3b8;'>定期定額正常扣款</span>" if cur >= ma20 else "<span style='color:#ef4444;font-weight:700;'>⚡ 破月線回檔加碼！</span>"
                 etf_results.append({
                     "標的": f"<a href='{link_url}' target='_blank' style='color:#38bdf8;text-decoration:none;font-weight:600;'>{clean_s} <span style='font-size:11px;color:#94a3b8;'>({sname})</span> ↗</a>",
@@ -639,10 +689,10 @@ def build_dashboard():
     <div class="wrap">
         <div class="header-box">
             <div>
-                <h1>📊 選股決策雷達 (熱門成交＋20萬以內動能版)</h1>
+                <h1>📊 選股決策雷達 (熱門族群戰情版)</h1>
                 <div class="sub">更新時間 (台北)：{now_str}</div>
             </div>
-            <div class="timer-box">🔄 3分鐘自動刷新<br><span style="color:#ef4444;">熱門成交自動排行</span> ｜ <span style="color:#38bdf8;">每張&lt;20萬</span></div>
+            <div class="timer-box">🔄 3分鐘自動刷新<br><span style="color:#ef4444;">熱門族群強度排行</span></div>
         </div>
 
         {timing_banner}
@@ -652,10 +702,19 @@ def build_dashboard():
             <div>{market_badge}</div>
         </div>
 
+        <!-- 新增：熱門族群資金板塊 -->
+        <div class="card">
+            <div class="card-header">
+                <span class="title">🔥 熱門族群資金動能排行 (CPO / 散熱水冷 / 封測 / 航運)</span>
+                <span class="badge badge-red">即時強弱看板</span>
+            </div>
+            {theme_cards_html}
+        </div>
+
         <div class="card">
             <div class="card-header">
                 <span class="title">⚡ 1. 今日台股當沖：自動抓熱門成交（一張 20 萬以下）</span>
-                <span class="badge badge-red">自動排名前15大 · 跳2~3檔達標</span>
+                <span class="badge badge-red">跳 2~3 檔達標 · 附一鍵複製</span>
             </div>
             <div class="table-wrap">{table_long}</div>
         </div>
@@ -701,7 +760,7 @@ listener_thread = threading.Thread(target=telegram_listener, daemon=True)
 listener_thread.start()
 
 try:
-    send_telegram_msg("🔥 <b>【自動熱門換血 ＋ 20萬限價濾網已啟用】</b>\n1. 系統自動按『當日成交金額』即時挑選市場最熱門前線股！\n2. 嚴格限定股價 30~200 元（每張 20 萬以內），徹底排除超高價牛皮股！\n3. 跳 2~3 個檔位即達 1,000~2,000 元當沖目標！", show_keyboard=True)
+    send_telegram_msg("🚀 <b>【App 已加入『熱門族群資金看板』】</b>\n儀表板現已新增 CPO 矽光子、AI 伺服器散熱水冷、先進封裝與航運族群強弱排行！", show_keyboard=True)
 except Exception: pass
 
 if __name__ == "__main__":
