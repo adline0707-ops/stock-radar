@@ -1,11 +1,21 @@
 import os
 import time
 from datetime import datetime, timezone, timedelta
+import urllib.parse
+import urllib.request
 import pandas as pd
 import yfinance as yf
 from flask import Flask
 
 app = Flask(__name__)
+
+# Telegram 設定
+TG_TOKEN = "8681385226:AAFvzJ-3L86hWNj_DYr1VZTa4X9dRi8SCYM"
+TG_CHAT_ID = "8865457240"
+
+# 紀錄今日已推播之代號（避免重覆洗版）
+notified_today = set()
+last_notified_date = ""
 
 cached_html = None
 last_update_time = 0
@@ -24,9 +34,22 @@ NAME_MAP = {
     "AMZN": "亞馬遜 Amazon", "QCOM": "高通 Qualcomm", "AVGO": "博通 Broadcom"
 }
 
-def get_tw_time():
+def send_telegram_msg(msg):
+    try:
+        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+        payload = urllib.parse.urlencode({
+            "chat_id": TG_CHAT_ID,
+            "text": msg,
+            "parse_mode": "HTML"
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=payload)
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as e:
+        print(f"TG 推播失敗: {e}")
+
+def get_tw_now():
     tz_tw = timezone(timedelta(hours=8))
-    return datetime.now(tz_tw).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(tz_tw)
 
 def make_link(sym):
     name = NAME_MAP.get(sym, sym)
@@ -38,8 +61,16 @@ def make_link(sym):
     return f'<a href="{url}" target="_blank" style="color:#38bdf8;text-decoration:none;font-weight:600;">{clean_sym} <span style="font-size:11px;color:#94a3b8;">({name})</span> ↗</a>'
 
 def build_dashboard():
-    now_str = get_tw_time()
-    
+    global notified_today, last_notified_date
+    now_dt = get_tw_now()
+    now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+    today_str = now_dt.strftime("%Y-%m-%d")
+
+    # 每日跨日清空已推播紀錄
+    if today_str != last_notified_date:
+        notified_today = set()
+        last_notified_date = today_str
+
     intraday_candidates = [
         "2330.TW", "2454.TW", "2382.TW", "2317.TW",
         "3017.TW", "3324.TWO", "3231.TW", "6669.TW",
@@ -98,6 +129,9 @@ def build_dashboard():
                 vwap = (today_row["High"] + today_row["Low"] + today_row["Close"]) / 3
                 vol_ratio = (today_row["Volume"] / df["Volume"].rolling(5).mean().iloc[-2]) if ("Volume" in today_row and df["Volume"].rolling(5).mean().iloc[-2] > 0) else 1.0
 
+                stock_name = NAME_MAP.get(sym, sym)
+
+                # 做多條件
                 if (cur >= op) and (cur >= prev_c) and (cur >= vwap):
                     long_results.append({
                         "標的": make_link(sym),
@@ -108,6 +142,20 @@ def build_dashboard():
                         "量能評估": f"{vol_ratio:.1f}x 均量" if vol_ratio > 1.2 else "常態量",
                         "訊號": "🔥 多方帶量攻"
                     })
+                    # 盤中推播通知（當日未推播過）
+                    if sym not in notified_today:
+                        notified_today.add(sym)
+                        msg = (
+                            f"🚨 <b>【當沖多方訊號觸發】</b>\n"
+                            f"標的：<b>{stock_name} ({sym})</b>\n"
+                            f"現價：<b>{cur:.2f}</b>\n"
+                            f"停損價 (-1%)：{cur * 0.99:.2f}\n"
+                            f"目標價 (+2%)：{cur * 1.02:.2f}\n"
+                            f"狀態：站上今開/均價線 (5日振幅 {amp_5d:.1f}%)"
+                        )
+                        send_telegram_msg(msg)
+
+                # 放空條件
                 elif (cur < op) and (cur < prev_c) and (cur < vwap):
                     short_results.append({
                         "標的": make_link(sym),
@@ -214,7 +262,7 @@ def build_dashboard():
                 <h1>📊 選股決策雷達 (專業全功能版)</h1>
                 <div class="sub">更新時間 (台北)：{now_str}</div>
             </div>
-            <div class="timer-box">🔄 3分鐘自動刷新</div>
+            <div class="timer-box">🔄 3分鐘自動刷新<br><span style="color:#10b981;">⚡ TG即時推播已連線</span></div>
         </div>
 
         <div class="market-banner">
@@ -266,6 +314,12 @@ def index():
         cached_html = build_dashboard()
         last_update_time = now
     return cached_html
+
+# 啟動時發送連線測試推播
+try:
+    send_telegram_msg("🚀 <b>【選股決策雷達】</b> 雲端即時監控與 Telegram 推播系統已啟動！")
+except Exception:
+    pass
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
