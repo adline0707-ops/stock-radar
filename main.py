@@ -22,18 +22,31 @@ cached_html = None
 last_update_time = 0
 CACHE_DURATION = 180
 
+# 擴充之中英文代號庫
 NAME_MAP = {
+    "3013.TW": "晟銘電", "6117.TW": "迎廣", "3450.TW": "聯鈞", "3163.TWO": "波若威",
+    "4979.TWO": "華星光", "3234.TWO": "光環", "2359.TW": "所羅門", "6188.TWO": "廣明",
+    "1513.TW": "中興電", "1514.TW": "亞力", "2449.TW": "京元電", "3231.TW": "緯創",
+    "2603.TW": "長榮", "2609.TW": "陽明", "2615.TW": "萬海", "2356.TW": "英業達",
+    "2376.TW": "技嘉", "2357.TW": "華碩", "2301.TW": "光寶科", "2383.TW": "台光電",
+    "3037.TW": "欣興", "2368.TW": "金像電", "8039.TW": "台虹", "2374.TW": "佳能",
+    "4583.TW": "台灣精銳", "2486.TW": "一詮", "3376.TW": "新日興", "6442.TW": "光聖",
+    "8054.TWO": "安國", "3661.TW": "世芯-KY", "3443.TW": "創意", "3017.TW": "奇鋐",
     "2330.TW": "台積電", "2454.TW": "聯發科", "2382.TW": "廣達", "2317.TW": "鴻海",
-    "3017.TW": "奇鋐", "3324.TWO": "雙鴻", "3231.TW": "緯創", "6669.TW": "緯穎",
-    "6442.TW": "光聖", "3163.TWO": "波若威", "4979.TWO": "華星光", "2303.TW": "聯電",
-    "2308.TW": "台達電", "2379.TW": "瑞昱", "2603.TW": "長榮", "2881.TW": "富邦金",
-    "2882.TW": "國泰金", "3008.TW": "大立光", "3711.TW": "日月光投控",
     "0050.TW": "元大台灣50", "006208.TW": "富邦台50", "00713.TW": "元大高息低波",
     "00878.TW": "國泰永續高股息", "VOO": "Vanguard標普500", "QQQ": "Invesco那斯達克",
     "NVDA": "輝達 NVIDIA", "TSLA": "特斯拉 Tesla", "AMD": "超微 AMD", "PLTR": "Palantir",
-    "AAPL": "蘋果 Apple", "MSFT": "微軟 Microsoft", "GOOGL": "谷歌 Alphabet",
-    "AMZN": "亞馬遜 Amazon", "QCOM": "高通 Qualcomm", "AVGO": "博通 Broadcom"
+    "AAPL": "蘋果 Apple", "MSFT": "微軟 Microsoft", "GOOGL": "谷歌 Alphabet"
 }
+
+# 基礎大池（涵蓋近半年前 50 名高人氣週轉標的）
+UNIVERSE_CANDIDATES = [
+    "3013.TW", "6117.TW", "3450.TW", "3163.TWO", "4979.TWO", "3234.TWO",
+    "2359.TW", "6188.TWO", "1513.TW", "1514.TW", "2449.TW", "3231.TW",
+    "2603.TW", "2609.TW", "2615.TW", "2356.TW", "2376.TW", "2301.TW",
+    "3037.TW", "2368.TW", "8039.TW", "2374.TW", "2486.TW", "3376.TW",
+    "8054.TWO"
+]
 
 def get_tick_size(price):
     if price < 10: return 0.01
@@ -60,7 +73,7 @@ def calculate_scalp_plan(price, is_tw=True):
     best_net1 = 0
     best_ticks1 = 3
 
-    for t in range(2, 7):
+    for t in range(2, 8):
         target_p = price + (tick * t)
         sell_amount = target_p * shares
         fee_buy = max(20, buy_amount * fee_rate)
@@ -121,22 +134,40 @@ def get_tw_now():
     return datetime.now(tz_tw)
 
 def scan_market_data():
-    tw_intraday = [
-        "2330.TW", "2454.TW", "2382.TW", "2317.TW",
-        "3017.TW", "3324.TWO", "3231.TW", "6669.TW",
-        "6442.TW", "3163.TWO", "4979.TWO"
-    ]
     tw_etf = ["0050.TW", "006208.TW", "00713.TW", "00878.TW"]
-    tw_potential = ["2330.TW", "2454.TW", "2303.TW", "2382.TW", "2308.TW", "2379.TW", "2603.TW", "2881.TW", "2882.TW", "3008.TW", "3711.TW"]
-    us_stocks = ["NVDA", "TSLA", "AMD", "PLTR", "AAPL", "MSFT", "GOOGL", "AMZN", "QCOM", "AVGO", "VOO", "QQQ"]
+    tw_potential = ["2330.TW", "2454.TW", "2382.TW", "2317.TW", "3017.TW", "2603.TW", "2881.TW", "2882.TW"]
+    us_stocks = ["NVDA", "TSLA", "AMD", "PLTR", "AAPL", "MSFT", "GOOGL", "VOO", "QQQ"]
     indices = ["^TWII", "^GSPC"]
 
-    all_syms = list(set(tw_intraday + tw_etf + tw_potential + us_stocks + indices))
+    all_syms = list(set(UNIVERSE_CANDIDATES + tw_etf + tw_potential + us_stocks + indices))
     try:
         data = yf.download(all_syms, period="3mo", group_by="ticker", auto_adjust=True, threads=True)
     except Exception:
         data = None
-    return data, tw_intraday, tw_etf, tw_potential, us_stocks
+
+    # 動態成交金額篩選：只抓 30元 <= 現價 <= 200元 (一張20萬以下) 且依成交額排序
+    dynamic_intraday = []
+    if data is not None:
+        ranked_list = []
+        for sym in UNIVERSE_CANDIDATES:
+            try:
+                df = data[sym].dropna()
+                if len(df) < 2: continue
+                c = df["Close"].iloc[-1]
+                vol = df["Volume"].iloc[-1]
+                # 嚴格價格濾網：一張 20 萬以內 (股價 <= 200) 且不低於 30 元
+                if 30.0 <= c <= 200.0:
+                    turnover = c * vol # 當日成交金額概算
+                    ranked_list.append((sym, turnover))
+            except Exception: pass
+        # 取成交金額前 15 名作為今日黃金當沖池
+        ranked_list.sort(key=lambda x: x[1], reverse=True)
+        dynamic_intraday = [item[0] for item in ranked_list[:15]]
+
+    if not dynamic_intraday:
+        dynamic_intraday = UNIVERSE_CANDIDATES[:12]
+
+    return data, dynamic_intraday, tw_etf, tw_potential, us_stocks
 
 def check_single_stock(query):
     query = query.upper().strip()
@@ -148,14 +179,13 @@ def check_single_stock(query):
             break
 
     if not target_sym:
-        # 嘗試直接作為股票代碼下載
         test_sym = query if ("." in query or len(query) < 5) else f"{query}.TW"
         target_sym = test_sym
 
     try:
         df = yf.download(target_sym, period="3mo", auto_adjust=True)
         if df.empty or len(df) < 5:
-            return f"❌ 找不到代號 <b>{query}</b> 的即時行情，請確認代號是否正確（例如：2330、NVDA、奇鋐）。"
+            return f"❌ 找不到代號 <b>{query}</b> 的即時行情，請確認代號是否正確（例如：3013、聯鈞、NVDA）。"
 
         cur = df["Close"].iloc[-1].item() if hasattr(df["Close"].iloc[-1], "item") else float(df["Close"].iloc[-1])
         op = df["Open"].iloc[-1].item() if hasattr(df["Open"].iloc[-1], "item") else float(df["Open"].iloc[-1])
@@ -172,12 +202,13 @@ def check_single_stock(query):
         is_tw = (".TW" in target_sym or ".TWO" in target_sym)
         plan = calculate_scalp_plan(cur, is_tw=is_tw)
         sname = NAME_MAP.get(target_sym, target_sym.split('.')[0])
+        cost_wan = f"每張約 {int(cur * 1000 / 10000)}萬" if is_tw else f"約 ${cur:.2f}"
 
         status_tag = "🔥 多方強勢攻" if (cur >= op and cur >= prev_c and cur >= vwap) else "⚠️ 破線震盪整理"
 
         msg = (
             f"🔎 <b>【個股即時診斷】{sname} ({target_sym})</b>\n"
-            f"現價：<b>{cur:.2f}</b> ({chg:+.2f}%)\n"
+            f"現價：<b>{cur:.2f}</b> ({chg:+.2f}%，{cost_wan})\n"
             f"技術位階：{status_tag}\n\n"
             f"📊 <b>關鍵均線與支撐：</b>\n"
             f"• 5日均線：{ma5:.2f}\n"
@@ -190,7 +221,7 @@ def check_single_stock(query):
             f"💡 <i>若目前股價高於當日均價線且乖離適中，偏多操作勝率較高！</i>"
         )
         return msg
-    except Exception as e:
+    except Exception:
         return f"⚠️ 查詢 {query} 時發生錯誤，請稍候重試。"
 
 def handle_query(query_type):
@@ -211,7 +242,7 @@ def handle_query(query_type):
         except Exception: pass
 
     if query_type == "scalp":
-        msg = f"⚡ <b>【台股當沖量化雷達】</b> ({now_str})\n🧭 <b>大盤氛圍：</b> {twii_text}\n\n"
+        msg = f"⚡ <b>【自動熱門當沖雷達 (一張20萬以下)】</b> ({now_str})\n🧭 <b>大盤氛圍：</b> {twii_text}\n\n"
         hits = []
         for sym in tw_intraday:
             try:
@@ -225,20 +256,23 @@ def handle_query(query_type):
                 pullback = ((hi - cur) / hi) * 100
                 chg = ((cur - prev_c) / prev_c) * 100
 
-                if (cur >= op) and (cur >= prev_c) and (cur >= vwap) and (chg < 8.5) and (pullback <= 1.5):
+                # 價格嚴格壓在 200 元以下 (一張20萬內)，且符合突破動能
+                if (cur <= 200.0) and (cur >= op) and (cur >= prev_c) and (cur >= vwap) and (chg < 8.5) and (pullback <= 1.5):
                     name = NAME_MAP.get(sym, sym)
                     plan = calculate_scalp_plan(cur, is_tw=True)
+                    clean_code = sym.split('.')[0]
+                    cost_info = f"每張約 {int(cur * 1000 / 10000)}萬"
                     hits.append(
-                        f"🔹 <b>{name} ({sym.split('.')[0]})</b> 現價 <b>{cur:.2f}</b> ({chg:+.2f}%)\n"
+                        f"🔹 <b>{name} ({clean_code})</b> 現價 <b>{cur:.2f}</b> ({chg:+.2f}%，{cost_info})\n"
                         f"   🎯 保底小賺：<b>{plan['target1']}</b> ({plan['pnl1']}，跳{plan['ticks1']}檔)\n"
                         f"   🚀 主力拉大：<b>{plan['target2']}</b> ｜ 🛑 停損：{plan['stop']}\n"
                     )
             except Exception: pass
         if hits:
-            msg += "🎯 <b>【當前符合爆量起漲標的】</b>\n\n" + "\n".join(hits[:3])
-            msg += "\n💡 <i>達標第一目標即可平倉保底 1~2 千，或移至保本讓利潤奔馳！</i>"
+            msg += "🎯 <b>【動態量能熱門前線標的】</b>\n\n" + "\n".join(hits[:3])
+            msg += "\n💡 <i>資金門檻全數壓在 20 萬以內，吃 2~3 個檔位即獲利落袋！</i>"
         else:
-            msg += "🛡️ <b>目前盤面無符合嚴格當沖條件標的。</b>\n（無量或回檔過大，請耐心空手觀望，切忌盲目追高！）"
+            msg += "🛡️ <b>熱門池中目前無符合突破條件之標的。</b>\n（無量或高點拉回過大，請耐心空手觀望，切忌盲目追高！）"
         return msg
 
     elif query_type == "today":
@@ -274,22 +308,23 @@ def handle_query(query_type):
         return msg
 
     elif query_type == "tomorrow":
-        msg = f"🌙 <b>【明日開盤獵股觀察清單】</b> ({now_str})\n🧭 <b>大盤總結：</b> {twii_text}\n\n"
+        msg = f"🌙 <b>【明日開盤動能觀察清單 (20萬以內)】</b> ({now_str})\n🧭 <b>大盤總結：</b> {twii_text}\n\n"
         picks = []
-        for sym in tw_potential:
+        for sym in tw_intraday[:8]:
             try:
                 df = data[sym].dropna()
-                if len(df) < 25: continue
+                if len(df) < 20: continue
                 c = df["Close"].iloc[-1]
                 ma5 = df["Close"].rolling(5).mean().iloc[-1]
                 ma20 = df["Close"].rolling(20).mean().iloc[-1]
                 bias = ((c - ma20) / ma20) * 100
-                if c >= ma20 and ma5 >= ma20 and 0.5 <= bias <= 7.0:
+                if (c <= 200.0) and (c >= ma20) and (ma5 >= ma20) and (0.5 <= bias <= 7.0):
                     name = NAME_MAP.get(sym, sym)
-                    picks.append(f"🔥 <b>{name} ({sym.split('.')[0]})</b> 收盤 {c:.2f}\n   月線支撐 {ma20:.2f} (乖離 +{bias:.1f}%)\n   👉 <b>作戰策略：</b> 明日開盤若開在均價線上，可偏多布局。")
+                    cost_info = f"一張約 {int(c * 1000 / 10000)}萬"
+                    picks.append(f"🔥 <b>{name} ({sym.split('.')[0]})</b> 收盤 {c:.2f} ({cost_info})\n   月線支撐 {ma20:.2f} (乖離 +{bias:.1f}%)\n   👉 <b>作戰策略：</b> 50~200元熱門成交前線股，明日開高可偏多布局。")
             except Exception: pass
 
-        msg += "📋 <b>【明日多方觀察標的】</b>\n\n" + ("\n\n".join(picks[:3]) if picks else "盤面多數回檔，明日開盤先觀察不急著進場。\n")
+        msg += "📋 <b>【明日動能熱門標的】</b>\n\n" + ("\n\n".join(picks[:3]) if picks else "盤面多數回檔，明日開盤先觀察不急著進場。\n")
         msg += "\n\n💡 <i>明天 09:05 開盤後，點擊【當沖可以買什麼】即可獲取即時點位！</i>"
         return msg
 
@@ -349,12 +384,10 @@ def telegram_listener():
     offset = 0
     while True:
         try:
-            # 每日 13:35 盤後自動推播速報
             now_dt = get_tw_now()
             today_str = now_dt.strftime("%Y-%m-%d")
             time_val = now_dt.hour * 100 + now_dt.minute
             
-            # 若為台股營業日收盤後 (13:35 ~ 14:00) 且今天尚未發送
             if (1335 <= time_val <= 1400) and (now_dt.weekday() < 5) and (daily_report_sent_date != today_str):
                 daily_report_sent_date = today_str
                 daily_msg = "📢 <b>【台股 13:35 盤後自動結算戰報】</b>\n\n" + handle_query("tomorrow")
@@ -372,9 +405,8 @@ def telegram_listener():
 
                     if not text: continue
 
-                    # 判斷是否為預設四大選單
                     if "當沖" in text:
-                        send_telegram_msg("🔍 正在進行全盤量化掃描，請稍候 3 秒...", target_chat_id=chat_id, show_keyboard=False)
+                        send_telegram_msg("🔍 正在自動挑選成交額最高、20萬以內熱門當沖股...", target_chat_id=chat_id, show_keyboard=False)
                         report = handle_query("scalp")
                         send_telegram_msg(report, target_chat_id=chat_id, show_keyboard=True)
                     elif "明天" in text:
@@ -390,7 +422,6 @@ def telegram_listener():
                         report = handle_query("us")
                         send_telegram_msg(report, target_chat_id=chat_id, show_keyboard=True)
                     else:
-                        # 隨打隨查個股
                         send_telegram_msg(f"🔎 正在為您調取 <b>{text}</b> 即時量價數據...", target_chat_id=chat_id, show_keyboard=False)
                         res_single = check_single_stock(text)
                         send_telegram_msg(res_single, target_chat_id=chat_id, show_keyboard=True)
@@ -453,6 +484,7 @@ def build_dashboard():
 
                 stock_name = NAME_MAP.get(sym, sym)
                 clean_sym = sym.split('.')[0]
+                cost_wan = f"約{int(cur * 1000 / 10000)}萬"
                 plan = calculate_scalp_plan(cur, is_tw=True)
 
                 change_pct = ((cur - prev_c) / prev_c) * 100
@@ -460,10 +492,10 @@ def build_dashboard():
 
                 target_copy_btn = f"<button class='copy-btn' onclick=\"copyVal('{plan['target1']}')\">{plan['target1']} 📋</button>"
 
-                if (cur >= op) and (cur >= prev_c) and (cur >= vwap) and (change_pct < 8.5) and (pullback_from_high <= 1.5):
+                if (cur <= 200.0) and (cur >= op) and (cur >= prev_c) and (cur >= vwap) and (change_pct < 8.5) and (pullback_from_high <= 1.5):
                     long_results.append({
                         "標的": f"<a href='https://tw.stock.yahoo.com/quote/{clean_sym}' target='_blank' style='color:#38bdf8;text-decoration:none;font-weight:700;'>{clean_sym} <span style='font-size:11px;color:#94a3b8;'>({stock_name})</span> ↗</a>",
-                        "現價": f"<span style='color:#ef4444;font-weight:700;'>{round(cur, 2)}</span>",
+                        "現價(門檻)": f"<span style='color:#ef4444;font-weight:700;'>{round(cur, 2)}</span> <span style='font-size:11px;color:#94a3b8;'>({cost_wan})</span>",
                         "保底目標(1~2千)": f"{target_copy_btn} <span style='color:#ef4444;font-size:11px;'>({plan['pnl1']})</span>",
                         "主力衝高": f"<b style='color:#f59e0b;'>{plan['target2']}</b> <span style='font-size:11px;'>({plan['pnl2']})</span>",
                         "嚴守停損": f"<span style='color:#10b981;font-weight:600;'>{plan['stop']}</span>",
@@ -473,13 +505,13 @@ def build_dashboard():
                     if is_golden_time and (sym not in notified_today):
                         notified_today.add(sym)
                         msg = (
-                            f"⚡ <b>【台股當沖雙目標訊號】</b>\n"
+                            f"⚡ <b>【熱門當沖雙目標訊號 (20萬內)】</b>\n"
                             f"標的：<b>{stock_name} ({sym})</b>\n"
-                            f"現價：<b>{cur:.2f}</b> (漲幅 {change_pct:+.2f}%)\n\n"
+                            f"現價：<b>{cur:.2f}</b> (漲幅 {change_pct:+.2f}%，每張{cost_wan})\n\n"
                             f"🎯 <b>第一目標 (保底)：{plan['target1']}</b> ({plan['pnl1']}，跳{plan['ticks1']}檔)\n"
                             f"🚀 <b>第二目標 (拉大)：{plan['target2']}</b> ({plan['pnl2']})\n"
                             f"🛑 <b>嚴守停損：{plan['stop']}</b>\n\n"
-                            f"💡 <i>達第一目標可平倉落袋 1~2 千，或將停損拉至進場價保本挑戰第二目標！</i>"
+                            f"💡 <i>吃 2~3 個檔位即獲利落袋，或將停損拉至進場價保本挑戰第二目標！</i>"
                         )
                         send_telegram_msg(msg)
 
@@ -551,13 +583,13 @@ def build_dashboard():
     df_etf = pd.DataFrame(etf_results)
     df_pot = pd.DataFrame(potential_results).sort_values(by="_score", ascending=False).drop(columns=["_score"]) if potential_results else pd.DataFrame()
 
-    table_long = df_long.to_html(index=False, escape=False) if not df_long.empty else '<div class="empty">🛡️ 今日無符合強勢做多標的（多方觀望，嚴禁盲目進場追高）。</div>'
+    table_long = df_long.to_html(index=False, escape=False) if not df_long.empty else '<div class="empty">🛡️ 今日熱門成交池中無符合強勢做多標的（多方觀望，嚴禁盲目追高）。</div>'
     table_short = df_short.to_html(index=False, escape=False) if not df_short.empty else '<div class="empty">盤面無明顯重挫標的。</div>'
     table_pot = df_pot.to_html(index=False, escape=False) if not df_pot.empty else '<div class="empty">目前無符合低風險起漲點之潛力標的。</div>'
     table_etf = df_etf.to_html(index=False, escape=False) if not df_etf.empty else '<div class="empty">暫無數據。</div>'
 
     if is_golden_time:
-        timing_banner = '<div style="background:#450a0a;border:1px solid #dc2626;padding:8px 12px;border-radius:8px;font-size:12px;color:#fecaca;margin-bottom:12px;">🔥 <b>台股黃金動能時段 (09:05-10:15)</b>：市場量能充沛，雙目標推播啟動中！</div>'
+        timing_banner = '<div style="background:#450a0a;border:1px solid #dc2626;padding:8px 12px;border-radius:8px;font-size:12px;color:#fecaca;margin-bottom:12px;">🔥 <b>台股黃金動能時段 (09:05-10:15)</b>：市場量能充沛，20萬內熱門動能推播中！</div>'
     elif is_market_closed:
         timing_banner = '<div style="background:#1e293b;border:1px solid #334155;padding:8px 12px;border-radius:8px;font-size:12px;color:#94a3b8;margin-bottom:12px;">🌙 <b>台股已收盤</b>：13:35 已推播盤後戰報。夜間可於 TG 查詢『美股』或任意輸入代號秒查行情！</div>'
     else:
@@ -607,10 +639,10 @@ def build_dashboard():
     <div class="wrap">
         <div class="header-box">
             <div>
-                <h1>📊 選股決策雷達 (旗艦操盤版)</h1>
+                <h1>📊 選股決策雷達 (熱門成交＋20萬以內動能版)</h1>
                 <div class="sub">更新時間 (台北)：{now_str}</div>
             </div>
-            <div class="timer-box">🔄 3分鐘自動刷新<br><span style="color:#ef4444;">台股紅漲綠跌</span> ｜ <span style="color:#38bdf8;">隨打隨查已就位</span></div>
+            <div class="timer-box">🔄 3分鐘自動刷新<br><span style="color:#ef4444;">熱門成交自動排行</span> ｜ <span style="color:#38bdf8;">每張&lt;20萬</span></div>
         </div>
 
         {timing_banner}
@@ -622,8 +654,8 @@ def build_dashboard():
 
         <div class="card">
             <div class="card-header">
-                <span class="title">⚡ 1. 今日台股當沖：強勢做多（目標淨利 1,000~2,000元）</span>
-                <span class="badge badge-red">紅漲綠跌 · 附一鍵複製</span>
+                <span class="title">⚡ 1. 今日台股當沖：自動抓熱門成交（一張 20 萬以下）</span>
+                <span class="badge badge-red">自動排名前15大 · 跳2~3檔達標</span>
             </div>
             <div class="table-wrap">{table_long}</div>
         </div>
@@ -669,7 +701,7 @@ listener_thread = threading.Thread(target=telegram_listener, daemon=True)
 listener_thread.start()
 
 try:
-    send_telegram_msg("🚀 <b>【旗艦級操盤戰情室已全數更新】</b>\n1. 手機 App 支援台股紅漲綠跌與『一鍵複製目標價』\n2. Telegram 支援『個股代號隨打即查』（輸入 2330、NVDA 秒回覆）\n3. 每日 13:35 自動推播盤後戰情報告！", show_keyboard=True)
+    send_telegram_msg("🔥 <b>【自動熱門換血 ＋ 20萬限價濾網已啟用】</b>\n1. 系統自動按『當日成交金額』即時挑選市場最熱門前線股！\n2. 嚴格限定股價 30~200 元（每張 20 萬以內），徹底排除超高價牛皮股！\n3. 跳 2~3 個檔位即達 1,000~2,000 元當沖目標！", show_keyboard=True)
 except Exception: pass
 
 if __name__ == "__main__":
