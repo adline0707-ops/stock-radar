@@ -11,7 +11,7 @@ import yfinance as yf
 app = Flask(__name__)
 
 # 2. 初始化 Telegram 機器人
-TG_TOKEN = os.environ.get("TG_TOKEN", "8681385226:AAEz20o9b9c_Jl04Z0ukUa8IUcFqRai1jyk")
+TG_TOKEN = os.environ.get("TG_TOKEN", "")
 bot = telebot.TeleBot(TG_TOKEN)
 
 # 3. 靜態完整台股中文名稱庫（100% 覆蓋所有代號）
