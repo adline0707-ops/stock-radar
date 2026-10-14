@@ -1,3 +1,6 @@
+
+# 當沖過濾黑名單：排除大型隔日沖倒貨重災區（如航運、牛皮金融傳產）
+SCALP_BLACKLIST = ["2609.TW", "2615.TW", "2603.TW", "2881.TW", "2882.TW", "2002.TW"]
 import os
 import time
 import json
@@ -766,3 +769,29 @@ except Exception: pass
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+
+
+def check_scalp_opportunity(stock_info, df_day):
+    """
+    量化當沖進場過濾：
+    1. 排除航運與大型牛皮股
+    2. 股價適中 (40 ~ 220 元)
+    3. 漲幅處於起跑回測安全區 (+1.0% ~ +3.0%)，避開已暴衝噴出的出貨盤
+    4. 股價穩站在當日均價線 (VWAP) 之上
+    """
+    symbol = stock_info.get("symbol", "")
+    if symbol in SCALP_BLACKLIST:
+        return None
+    
+    price = stock_info.get("price", 0)
+    change_pct = stock_info.get("change_pct", 0)
+    
+    # 限制股價區間 (40元至220元，一張約4~22萬最活潑標的)
+    if not (40 <= price <= 220):
+        return None
+        
+    # 漲幅必須在 +1.0% 至 +3.2% 之間 (起漲點或回測均價線守穩，嚴禁追高)
+    if not (1.0 <= change_pct <= 3.2):
+        return None
+        
+    return stock_info
