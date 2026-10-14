@@ -14,33 +14,57 @@ app = Flask(__name__)
 TG_TOKEN = os.environ.get("TG_TOKEN", "8681385226:AAEz20o9b9c_Jl04Z0ukUa8IUcFqRai1jyk")
 bot = telebot.TeleBot(TG_TOKEN)
 
-# 3. 完整台股中文名稱庫（含上市/上櫃熱門飆股）
-TW_STOCK_DICT = {
-    # ETF
+# 3. 官方全台股代碼名稱對照快取字典
+STOCK_NAME_CACHE = {
+    # 常用 ETF
     "0050": "元大台灣50", "006208": "富邦台50", "00692": "富邦公司治理",
     "00878": "國泰永續高股息", "00919": "群益台灣精選高息", "00713": "元大台灣高息低波",
     "00631L": "元大台灣50正2", "00670L": "富邦NASDAQ正2", "00830": "國泰費城半導體",
     "00935": "野村臺灣新科技50", "0052": "富邦科技",
-    # 權值與焦點個股
+    # 熱門焦點
     "2330": "台積電", "2454": "聯發科", "2308": "台達電", "2317": "鴻海",
     "2382": "廣達", "6669": "緯穎", "3231": "緯創", "2357": "華碩",
-    "6770": "力積電", "3624": "光頡", "2305": "全友",
-    "3450": "聯鈞", "3017": "奇鋐", "3324": "雙鴻", "2383": "台光電",
-    "6274": "台燿", "3131": "弘塑", "3583": "辛耘", "3661": "世芯-KY",
-    "3081": "聯亞", "4979": "華星光", "3163": "波若威", "6442": "光聖",
-    "1519": "華城", "1503": "士電", "1513": "中興電",
-    "2881": "富邦金", "2891": "中信金"
+    "6770": "力積電", "3624": "光頡", "2305": "全友", "2383": "台光電",
+    "3450": "聯鈞", "3017": "奇鋐", "3324": "雙鴻", "6274": "台燿",
+    "3131": "弘塑", "3583": "辛耘", "3661": "世芯-KY", "3081": "聯亞",
+    "4979": "華星光", "3163": "波若威", "6442": "光聖", "1519": "華城"
 }
+
+def load_official_tw_stock_names():
+    """從證交所 ISIN 官方清冊下載全台股上市/上櫃代號中文表"""
+    urls = [
+        "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2", # 上市
+        "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4"  # 上櫃
+    ]
+    for url in urls:
+        try:
+            r = requests.get(url, timeout=5)
+            r.encoding = 'big5'
+            # 抓取格式如： 2330 台積電
+            items = re.findall(r'(\b[0-9]{4,6}[A-Z]?\b)[\u3000\s]+([\u4e00-\u9fa5A-Za-z0-9\-]+)', r.text)
+            for code, name in items:
+                STOCK_NAME_CACHE[code] = name.strip()
+        except Exception:
+            continue
+
+# 在背景載入全市場名稱清單
+threading.Thread(target=load_official_tw_stock_names, daemon=True).start()
 
 def get_stock_name(symbol):
     clean = symbol.replace(".TW", "").replace(".TWO", "").strip()
-    if clean in TW_STOCK_DICT:
-        return TW_STOCK_DICT[clean]
+    if clean in STOCK_NAME_CACHE:
+        return STOCK_NAME_CACHE[clean]
+    
+    # 即時查詢 Yahoo 網頁標題或證交所備用
     try:
-        r = requests.get(f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{clean}.tw|otc_{clean}.tw", timeout=2)
-        data = r.json()
-        if data.get("msgArray"):
-            return data["msgArray"][0].get("n", clean)
+        url = f"https://tw.stock.yahoo.com/quote/{symbol}"
+        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=2)
+        if res.status_code == 200:
+            match = re.search(r'<title>([^<]+)\s*\(([0-9]{4,6})\)', res.text)
+            if match:
+                name = match.group(1).replace("個股走勢", "").replace("-", "").strip()
+                STOCK_NAME_CACHE[clean] = name
+                return name
     except Exception:
         pass
     return clean
@@ -48,23 +72,21 @@ def get_stock_name(symbol):
 # 4. 黑名單：隔日沖倒貨與牛皮股
 BLACKLIST_SYMBOLS = ["2609", "2615", "2603", "2002"]
 
-# 5. 長線固定核心標的池
+# 5. 標的池
 LONG_ETF_POOL = ["0050.TW", "006208.TW", "00692.TW", "00878.TW", "00919.TW", "00713.TW"]
 LONG_STOCK_POOL = ["2330.TW", "2454.TW", "2308.TW", "2317.TW", "2881.TW", "2891.TW"]
 SHORT_ETF_POOL = ["00631L.TW", "00670L.TW", "00830.TW", "00935.TW", "0052.TW"]
 
-# 6. 動態抓取上市 + 上櫃成交金額前 30 大排行榜
 def get_dynamic_market_leaders():
-    """動態取得上市與上櫃成交金額排行"""
+    """動態取得上市與上櫃熱門成交排行"""
     dynamic_pool = []
-    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0"}
     
-    # 1. 集中市場（上市）
+    # 上市熱門
     try:
         res = requests.get("https://tw.stock.yahoo.com/class-quote?sectorId=all&exchange=TAI&order=volume_amount&sort=desc", headers=headers, timeout=4)
         if res.status_code == 200:
-            found = re.findall(r'href="\/quote\/([0-9]{4})\.TW"', res.text)
-            for sym in found:
+            for sym in re.findall(r'href="\/quote\/([0-9]{4})\.TW"', res.text):
                 if sym not in BLACKLIST_SYMBOLS and f"{sym}.TW" not in dynamic_pool:
                     dynamic_pool.append(f"{sym}.TW")
                 if len(dynamic_pool) >= 15:
@@ -72,12 +94,11 @@ def get_dynamic_market_leaders():
     except Exception:
         pass
 
-    # 2. 櫃買市場（上櫃，如光頡、聯亞等）
+    # 上櫃熱門（如光頡 3624、聯亞等）
     try:
         res_otc = requests.get("https://tw.stock.yahoo.com/class-quote?sectorId=all&exchange=TWO&order=volume_amount&sort=desc", headers=headers, timeout=4)
         if res_otc.status_code == 200:
-            found_otc = re.findall(r'href="\/quote\/([0-9]{4})\.TWO"', res_otc.text)
-            for sym in found_otc:
+            for sym in re.findall(r'href="\/quote\/([0-9]{4})\.TWO"', res_otc.text):
                 if sym not in BLACKLIST_SYMBOLS and f"{sym}.TWO" not in dynamic_pool:
                     dynamic_pool.append(f"{sym}.TWO")
                 if len(dynamic_pool) >= 30:
@@ -85,10 +106,8 @@ def get_dynamic_market_leaders():
     except Exception:
         pass
 
-    # 若網路爬蟲暫時阻擋，使用備用高熱度主流題材池（含力積電、光頡、全友）
     if not dynamic_pool:
-        fallback = ["6770.TW", "3624.TWO", "2305.TW", "3450.TW", "3017.TW", "3324.TW", "2383.TW", "6274.TW", "3131.TW", "3583.TW"]
-        dynamic_pool = [s for s in fallback if s.split(".")[0] not in BLACKLIST_SYMBOLS]
+        dynamic_pool = ["6770.TW", "3624.TWO", "2305.TW", "3450.TW", "3017.TW", "3324.TW", "2383.TW", "6274.TW", "3131.TW", "3583.TW"]
         
     return dynamic_pool
 
@@ -112,6 +131,10 @@ def fetch_data(symbols, strat_type):
             ma60 = closes.tail(60).mean() if len(closes) >= 60 else ma20
             clean_sym = sym.replace(".TW", "").replace(".TWO", "")
             name = get_stock_name(sym)
+            
+            # 若仍未取得中文，強制以備用字典覆蓋
+            if name == clean_sym and clean_sym in STOCK_NAME_CACHE:
+                name = STOCK_NAME_CACHE[clean_sym]
             
             if strat_type == "long_etf":
                 buy_zone = f"{round(cur_price * 0.98, 2)} ~ {cur_price}"
@@ -137,12 +160,12 @@ def fetch_data(symbols, strat_type):
                     cards.append({"name": name, "sym": clean_sym, "price": cur_price, "chg": change_pct, "timing": timing, "buy_zone": buy_zone, "target": target, "defense": defense, "tip": "短波段持有，獲利達標入袋"})
                     
             elif strat_type == "short_stock":
-                # 放寬動能門檻至 +5.8%，納入上市與上櫃熱門強勢股，但避開漲停鎖死追不到的股票
+                # 放寬動能門檻至 +5.8%，納入熱門強勢股
                 if cur_price >= ma20 and (-1.0 <= change_pct <= 5.8):
                     buy_zone = f"{round(cur_price * 0.99, 1)} ~ {round(cur_price * 1.01, 1)}"
                     target = f"{round(cur_price * 1.12, 1)} (+12% 波段獲利點)"
                     defense = f"{round(min(ma20 * 0.97, cur_price * 0.95), 1)} (跌破月線果斷砍單)"
-                    timing = "🔥 上市/上櫃熱門成交榜動能股，多頭均線向上，適合波段佈局。"
+                    timing = "🔥 上市櫃熱門成交榜動能股，多頭均線向上，適合零股短波段。"
                     cards.append({"name": name, "sym": clean_sym, "price": cur_price, "chg": change_pct, "timing": timing, "buy_zone": buy_zone, "target": target, "defense": defense, "tip": "動態熱錢榜強勢股，分批進出"})
                     
             if len(cards) >= 4:
@@ -175,7 +198,7 @@ HTML_TEMPLATE = """
     <style>
         body { background: #0b0f19; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; padding-bottom: 50px; }
         .card-custom { background: #161e2e; border: 1px solid #2d3748; border-radius: 14px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
-        .stock-title { color: #ffffff !important; font-size: 1.25rem; font-weight: 800; letter-spacing: 0.5px; }
+        .stock-title { color: #ffffff !important; font-size: 1.25rem; font-weight: 800; }
         .stock-code { color: #94a3b8 !important; font-size: 0.95rem; font-weight: normal; margin-left: 4px; }
         .badge-long { background: #059669; color: #ffffff; font-weight: 600; padding: 6px 10px; border-radius: 6px; }
         .badge-short { background: #2563eb; color: #ffffff; font-weight: 600; padding: 6px 10px; border-radius: 6px; }
