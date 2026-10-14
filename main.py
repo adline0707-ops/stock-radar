@@ -795,3 +795,50 @@ def check_scalp_opportunity(stock_info, df_day):
         return None
         
     return stock_info
+
+
+def check_swing_opportunity(stock_info, hist_data):
+    """
+    零股小額分批波段選股條件：
+    1. 不限高價：股價 40 ~ 1500 元皆可（適合零股定期定額/分批佈局核心龍頭）
+    2. 趨勢保護：股價穩站 20MA (月線) 之上，且 20MA 向上
+    3. 主升結構：5MA >= 20MA，均線多頭發散
+    4. 買在起漲或回測點：漲幅在 -0.5% ~ +3.8% 之間（嚴禁追高，適合掛單低接分批買）
+    5. 具備流動性：5日均量充足，不怕零股撮合不掉
+    """
+    try:
+        price = stock_info.get("price", 0)
+        change_pct = stock_info.get("change_pct", 0)
+        
+        # 門檻 1：涵蓋優質中高價龍頭股 (40 ~ 1500元)
+        if not (40 <= price <= 1500):
+            return None
+            
+        # 門檻 2：不追高，適合回檔佈局 (-0.5% ~ +3.8%)
+        if not (-0.5 <= change_pct <= 3.8):
+            return None
+            
+        if hist_data is None or len(hist_data) < 25:
+            return None
+            
+        closes = hist_data["Close"]
+        volumes = hist_data["Volume"]
+        
+        ma5 = closes.tail(5).mean()
+        ma10 = closes.tail(10).mean()
+        ma20 = closes.tail(20).mean()
+        ma20_prev = closes.iloc[-25:-5].mean() if len(closes) >= 25 else ma20
+        vol5 = volumes.tail(5).mean()
+        
+        current_price = closes.iloc[-1]
+        
+        # 門檻 3：月線向上 + 站在月線之上 + 均線多頭排列
+        if current_price >= ma20 and ma5 >= ma20 and ma20 >= ma20_prev:
+            target_profit = round(current_price * 1.12, 1) # 中短線波段目標 +12%
+            stop_loss = round(min(ma20 * 0.97, current_price * 0.95), 1) # 跌破月線 -3% 嚴守停損
+            
+            stock_info["swing_note"] = f"🎯 波段目標: {target_profit} (+12%) | 🛡️ 月線防守: {stop_loss} | 💡 建議策略: 零股分批佈局"
+            return stock_info
+    except Exception:
+        pass
+    return None
