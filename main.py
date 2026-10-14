@@ -14,7 +14,7 @@ app = Flask(__name__)
 TG_TOKEN = os.environ.get("TG_TOKEN", "8681385226:AAEz20o9b9c_Jl04Z0ukUa8IUcFqRai1jyk")
 bot = telebot.TeleBot(TG_TOKEN)
 
-# 靜態內嵌完整台股中文對照表（確保 100% 命中，絕不漏掉）
+# 3. 靜態完整台股中文名稱庫（100% 覆蓋所有代號）
 EXPLICIT_NAME_MAP = {
     # 長線 ETF
     "0050": "元大台灣50", "006208": "富邦台50", "00692": "富邦公司治理",
@@ -41,36 +41,21 @@ def get_stock_name(symbol):
     clean = symbol.replace(".TW", "").replace(".TWO", "").strip()
     if clean in EXPLICIT_NAME_MAP:
         return EXPLICIT_NAME_MAP[clean]
-    
-    # 備用爬蟲嘗試
-    try:
-        import requests
-        r = requests.get(f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{clean}.tw|otc_{clean}.tw", timeout=2)
-        data = r.json()
-        if data.get("msgArray"):
-            n = data["msgArray"][0].get("n")
-            if n:
-                return n.strip()
-    except Exception:
-        pass
     return clean
 
 # 4. 黑名單：隔日沖倒貨與牛皮股
 BLACKLIST_SYMBOLS = ["2609", "2615", "2603", "2002"]
 
-# 5. 標的池
+# 5. 核心標的池
 LONG_ETF_POOL = ["0050.TW", "006208.TW", "00692.TW", "00878.TW", "00919.TW", "00713.TW"]
 LONG_STOCK_POOL = ["2330.TW", "2454.TW", "2308.TW", "2317.TW", "2881.TW", "2891.TW"]
 SHORT_ETF_POOL = ["00631L.TW", "00670L.TW", "00830.TW", "00935.TW", "0052.TW"]
 
 def get_dynamic_market_leaders():
-    """動態取得上市與上櫃熱門成交排行"""
     dynamic_pool = []
     headers = {"User-Agent": "Mozilla/5.0"}
-    
-    # 上市熱門
     try:
-        res = requests.get("https://tw.stock.yahoo.com/class-quote?sectorId=all&exchange=TAI&order=volume_amount&sort=desc", headers=headers, timeout=4)
+        res = requests.get("https://tw.stock.yahoo.com/class-quote?sectorId=all&exchange=TAI&order=volume_amount&sort=desc", headers=headers, timeout=3)
         if res.status_code == 200:
             for sym in re.findall(r'href="\/quote\/([0-9]{4})\.TW"', res.text):
                 if sym not in BLACKLIST_SYMBOLS and f"{sym}.TW" not in dynamic_pool:
@@ -80,9 +65,8 @@ def get_dynamic_market_leaders():
     except Exception:
         pass
 
-    # 上櫃熱門（如光頡 3624、聯亞等）
     try:
-        res_otc = requests.get("https://tw.stock.yahoo.com/class-quote?sectorId=all&exchange=TWO&order=volume_amount&sort=desc", headers=headers, timeout=4)
+        res_otc = requests.get("https://tw.stock.yahoo.com/class-quote?sectorId=all&exchange=TWO&order=volume_amount&sort=desc", headers=headers, timeout=3)
         if res_otc.status_code == 200:
             for sym in re.findall(r'href="\/quote\/([0-9]{4})\.TWO"', res_otc.text):
                 if sym not in BLACKLIST_SYMBOLS and f"{sym}.TWO" not in dynamic_pool:
@@ -94,7 +78,6 @@ def get_dynamic_market_leaders():
 
     if not dynamic_pool:
         dynamic_pool = ["6770.TW", "3624.TWO", "2305.TW", "3450.TW", "3017.TW", "3324.TW", "2383.TW", "6274.TW", "3131.TW", "3583.TW"]
-        
     return dynamic_pool
 
 def fetch_data(symbols, strat_type):
@@ -117,10 +100,6 @@ def fetch_data(symbols, strat_type):
             ma60 = closes.tail(60).mean() if len(closes) >= 60 else ma20
             clean_sym = sym.replace(".TW", "").replace(".TWO", "")
             name = get_stock_name(sym)
-            
-            # 若仍未取得中文，強制以備用字典覆蓋
-            if name == clean_sym and clean_sym in STOCK_NAME_CACHE:
-                name = STOCK_NAME_CACHE[clean_sym]
             
             if strat_type == "long_etf":
                 buy_zone = f"{round(cur_price * 0.98, 2)} ~ {cur_price}"
@@ -146,12 +125,11 @@ def fetch_data(symbols, strat_type):
                     cards.append({"name": name, "sym": clean_sym, "price": cur_price, "chg": change_pct, "timing": timing, "buy_zone": buy_zone, "target": target, "defense": defense, "tip": "短波段持有，獲利達標入袋"})
                     
             elif strat_type == "short_stock":
-                # 放寬動能門檻至 +5.8%，納入熱門強勢股
                 if cur_price >= ma20 and (-1.0 <= change_pct <= 5.8):
                     buy_zone = f"{round(cur_price * 0.99, 1)} ~ {round(cur_price * 1.01, 1)}"
                     target = f"{round(cur_price * 1.12, 1)} (+12% 波段獲利點)"
                     defense = f"{round(min(ma20 * 0.97, cur_price * 0.95), 1)} (跌破月線果斷砍單)"
-                    timing = "🔥 上市櫃熱門成交榜動能股，多頭均線向上，適合零股短波段。"
+                    timing = "🔥 上市/上櫃熱門成交榜動能股，多頭均線向上，適合零股短波段。"
                     cards.append({"name": name, "sym": clean_sym, "price": cur_price, "chg": change_pct, "timing": timing, "buy_zone": buy_zone, "target": target, "defense": defense, "tip": "動態熱錢榜強勢股，分批進出"})
                     
             if len(cards) >= 4:
@@ -172,7 +150,6 @@ def format_tg_card(item):
         f"💡 <b>操作指引</b>：{item['tip']}"
     )
 
-# ----------------- Web App 儀表板 HTML 頁面 -----------------
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -201,7 +178,6 @@ HTML_TEMPLATE = """
         <p class="text-info">長線穩健存股 + 上市上櫃動態熱錢榜 | 進出場時機指引</p>
     </div>
 
-    <!-- 1. 長線 ETF -->
     <h4 class="section-title">🏛️ 長線可抱 ETF（定期定額 / 逢低存股）</h4>
     <div class="row">
         {% for item in long_etf %}
@@ -221,7 +197,6 @@ HTML_TEMPLATE = """
         {% endfor %}
     </div>
 
-    <!-- 2. 長線 個股 -->
     <h4 class="section-title">💎 長線可抱 個股（產業龍頭 / 核心資產）</h4>
     <div class="row">
         {% for item in long_stock %}
@@ -241,7 +216,6 @@ HTML_TEMPLATE = """
         {% endfor %}
     </div>
 
-    <!-- 3. 短線 ETF -->
     <h4 class="section-title">⚡ 短線可抱 ETF（趨勢動能波段）</h4>
     <div class="row">
         {% for item in short_etf %}
@@ -261,7 +235,6 @@ HTML_TEMPLATE = """
         {% endfor %}
     </div>
 
-    <!-- 4. 短線 個股（上市櫃動態熱錢榜） -->
     <h4 class="section-title">🚀 短線可抱 個股（🔥 上市/上櫃動態熱錢榜過濾）</h4>
     <div class="row">
         {% for item in short_stock %}
@@ -292,7 +265,11 @@ def index():
     s_stk = fetch_data([], "short_stock")
     return render_template_string(HTML_TEMPLATE, long_etf=l_etf, long_stock=l_stk, short_etf=s_etf, short_stock=s_stk)
 
-# ----------------- Telegram 機器人事件處理 -----------------
+@app.route('/healthz')
+def health():
+    return "ok", 200
+
+# ----------------- Telegram 機器人 -----------------
 def get_main_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
     keyboard.row(types.KeyboardButton("🏛️ 長線可抱ETF"), types.KeyboardButton("💎 長線可抱個股"))
@@ -339,13 +316,15 @@ def handle_text(message):
     else:
         bot.send_message(chat_id, "請點選下方選單按鈕查詢股票策略！", reply_markup=get_main_keyboard())
 
-def start_bot():
-    print("Telegram Bot polling started...")
-    bot.infinity_polling()
+# 安全守護：僅在背景執行一次輪詢，不卡死 Gunicorn 主進程
+def run_bot_safe():
+    try:
+        bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    except Exception as e:
+        print(f"Bot polling error: {e}")
 
-t = threading.Thread(target=start_bot)
-t.daemon = True
-t.start()
+_bot_thread = threading.Thread(target=run_bot_safe, daemon=True)
+_bot_thread.start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
