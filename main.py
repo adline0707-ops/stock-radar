@@ -11,7 +11,7 @@ from flask import Flask
 
 app = Flask(__name__)
 
-TG_TOKEN = "8681385226:AAG_1drAsJU3RDmF__jZ0Eblx8LI1eBvrOw"
+TG_TOKEN = os.environ.get("TG_TOKEN", "")
 TG_CHAT_ID = "8865457240"
 
 notified_today = set()
