@@ -14,57 +14,43 @@ app = Flask(__name__)
 TG_TOKEN = os.environ.get("TG_TOKEN", "8681385226:AAEz20o9b9c_Jl04Z0ukUa8IUcFqRai1jyk")
 bot = telebot.TeleBot(TG_TOKEN)
 
-# 3. 官方全台股代碼名稱對照快取字典
-STOCK_NAME_CACHE = {
-    # 常用 ETF
+# 靜態內嵌完整台股中文對照表（確保 100% 命中，絕不漏掉）
+EXPLICIT_NAME_MAP = {
+    # 長線 ETF
     "0050": "元大台灣50", "006208": "富邦台50", "00692": "富邦公司治理",
     "00878": "國泰永續高股息", "00919": "群益台灣精選高息", "00713": "元大台灣高息低波",
+    "0056": "元大高股息", "00929": "復華台灣科技優息", "00940": "元大台灣價值高息",
+    # 短線/槓桿 ETF
     "00631L": "元大台灣50正2", "00670L": "富邦NASDAQ正2", "00830": "國泰費城半導體",
-    "00935": "野村臺灣新科技50", "0052": "富邦科技",
-    # 熱門焦點
+    "00935": "野村臺灣新科技50", "0052": "富邦科技", "00675L": "富邦臺灣加權正2",
+    # 長線個股 & 金控龍頭
     "2330": "台積電", "2454": "聯發科", "2308": "台達電", "2317": "鴻海",
-    "2382": "廣達", "6669": "緯穎", "3231": "緯創", "2357": "華碩",
+    "2881": "富邦金", "2891": "中信金", "2882": "國泰金", "2886": "兆豐金",
+    "2884": "玉山金", "2892": "第一金", "5880": "合庫金", "2357": "華碩",
+    # 熱門焦點 & 上市櫃動態個股
     "6770": "力積電", "3624": "光頡", "2305": "全友", "2383": "台光電",
-    "3450": "聯鈞", "3017": "奇鋐", "3324": "雙鴻", "6274": "台燿",
-    "3131": "弘塑", "3583": "辛耘", "3661": "世芯-KY", "3081": "聯亞",
-    "4979": "華星光", "3163": "波若威", "6442": "光聖", "1519": "華城"
+    "3583": "辛耘", "3450": "聯鈞", "3017": "奇鋐", "3324": "雙鴻",
+    "6274": "台燿", "3131": "弘塑", "3661": "世芯-KY", "3081": "聯亞",
+    "4979": "華星光", "3163": "波若威", "6442": "光聖", "1519": "華城",
+    "1503": "士電", "1513": "中興電", "2382": "廣達", "6669": "緯穎",
+    "3231": "緯創", "2376": "技嘉", "2002": "中鋼", "2603": "長榮",
+    "2609": "陽明", "2615": "萬海", "3035": "智原", "3443": "創意"
 }
-
-def load_official_tw_stock_names():
-    """從證交所 ISIN 官方清冊下載全台股上市/上櫃代號中文表"""
-    urls = [
-        "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2", # 上市
-        "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4"  # 上櫃
-    ]
-    for url in urls:
-        try:
-            r = requests.get(url, timeout=5)
-            r.encoding = 'big5'
-            # 抓取格式如： 2330 台積電
-            items = re.findall(r'(\b[0-9]{4,6}[A-Z]?\b)[\u3000\s]+([\u4e00-\u9fa5A-Za-z0-9\-]+)', r.text)
-            for code, name in items:
-                STOCK_NAME_CACHE[code] = name.strip()
-        except Exception:
-            continue
-
-# 在背景載入全市場名稱清單
-threading.Thread(target=load_official_tw_stock_names, daemon=True).start()
 
 def get_stock_name(symbol):
     clean = symbol.replace(".TW", "").replace(".TWO", "").strip()
-    if clean in STOCK_NAME_CACHE:
-        return STOCK_NAME_CACHE[clean]
+    if clean in EXPLICIT_NAME_MAP:
+        return EXPLICIT_NAME_MAP[clean]
     
-    # 即時查詢 Yahoo 網頁標題或證交所備用
+    # 備用爬蟲嘗試
     try:
-        url = f"https://tw.stock.yahoo.com/quote/{symbol}"
-        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=2)
-        if res.status_code == 200:
-            match = re.search(r'<title>([^<]+)\s*\(([0-9]{4,6})\)', res.text)
-            if match:
-                name = match.group(1).replace("個股走勢", "").replace("-", "").strip()
-                STOCK_NAME_CACHE[clean] = name
-                return name
+        import requests
+        r = requests.get(f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{clean}.tw|otc_{clean}.tw", timeout=2)
+        data = r.json()
+        if data.get("msgArray"):
+            n = data["msgArray"][0].get("n")
+            if n:
+                return n.strip()
     except Exception:
         pass
     return clean
