@@ -15,25 +15,37 @@ TG_TOKEN = os.environ.get("TG_TOKEN", "8681385226:AAEz20o9b9c_Jl04Z0ukUa8IUcFqRa
 bot = telebot.TeleBot(TG_TOKEN)
 
 # 3. 股票/ETF 基礎繁體中文名稱字典
-BASE_STOCK_NAMES = {
-    "0050.TW": "元大台灣50",
-    "006208.TW": "富邦台50",
-    "00692.TW": "富邦公司治理",
-    "00878.TW": "國泰永續高股息",
-    "00919.TW": "群益台灣精選高息",
-    "00713.TW": "元大台灣高息低波",
-    "2330.TW": "台積電",
-    "2454.TW": "聯發科",
-    "2308.TW": "台達電",
-    "2317.TW": "鴻海",
-    "2881.TW": "富邦金",
-    "2891.TW": "中信金",
-    "00631L.TW": "元大台灣50正2",
-    "00670L.TW": "富邦NASDAQ正2",
-    "00830.TW": "國泰費城半導體",
-    "00935.TW": "野村臺灣新科技50",
-    "0052.TW": "富邦科技"
+# 完整台股熱門中文名稱庫
+TW_STOCK_DICT = {
+    # ETF
+    "0050": "元大台灣50", "006208": "富邦台50", "00692": "富邦公司治理",
+    "00878": "國泰永續高股息", "00919": "群益台灣精選高息", "00713": "元大台灣高息低波",
+    "00631L": "元大台灣50正2", "00670L": "富邦NASDAQ正2", "00830": "國泰費城半導體",
+    "00935": "野村臺灣新科技50", "0052": "富邦科技",
+    # 權值與熱門動態股
+    "2330": "台積電", "2454": "聯發科", "2308": "台達電", "2317": "鴻海",
+    "2382": "廣達", "6669": "緯穎", "3231": "緯創", "2357": "華碩",
+    "3450": "聯鈞", "3017": "奇鋐", "3324": "雙鴻", "2383": "台光電",
+    "6274": "台燿", "3131": "弘塑", "3583": "辛耘", "3661": "世芯-KY",
+    "3081": "聯亞", "4979": "華星光", "3163": "波若威", "6442": "光聖",
+    "1519": "華城", "1503": "士電", "1513": "中興電", "2609": "陽明",
+    "2615": "萬海", "2603": "長榮", "2881": "富邦金", "2891": "中信金"
 }
+
+def get_stock_name(symbol):
+    clean = symbol.replace(".TW", "").replace(".TWO", "").strip()
+    if clean in TW_STOCK_DICT:
+        return TW_STOCK_DICT[clean]
+    # 嘗試從證交所 API 即時查詢中文名稱
+    try:
+        import requests
+        r = requests.get(f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{clean}.tw", timeout=2)
+        data = r.json()
+        if data.get("msgArray"):
+            return data["msgArray"][0].get("n", clean)
+    except Exception:
+        pass
+    return clean
 
 # 4. 黑名單：隔日沖倒貨與大型無波段標的
 BLACKLIST_SYMBOLS = ["2609", "2615", "2603", "2002", "2881", "2882"]
@@ -89,12 +101,7 @@ def fetch_data(symbols, strat_type):
             clean_sym = sym.replace(".TW", "")
             
             # 取得中文名稱
-            name = BASE_STOCK_NAMES.get(sym)
-            if not name:
-                info = ticker.info
-                name = info.get("shortName") or info.get("longName") or clean_sym
-                # 濾除英文字母多餘綴詞
-                name = name.split(" ")[0].replace("Co.,Ltd.", "").strip()
+            name = get_stock_name(sym)
             
             if strat_type == "long_etf":
                 buy_zone = f"{round(cur_price * 0.98, 2)} ~ {cur_price}"
