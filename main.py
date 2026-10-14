@@ -14,32 +14,30 @@ app = Flask(__name__)
 TG_TOKEN = os.environ.get("TG_TOKEN", "8681385226:AAEz20o9b9c_Jl04Z0ukUa8IUcFqRai1jyk")
 bot = telebot.TeleBot(TG_TOKEN)
 
-# 3. 股票/ETF 基礎繁體中文名稱字典
-# 完整台股熱門中文名稱庫
+# 3. 完整台股中文名稱庫（含上市/上櫃熱門飆股）
 TW_STOCK_DICT = {
     # ETF
     "0050": "元大台灣50", "006208": "富邦台50", "00692": "富邦公司治理",
     "00878": "國泰永續高股息", "00919": "群益台灣精選高息", "00713": "元大台灣高息低波",
     "00631L": "元大台灣50正2", "00670L": "富邦NASDAQ正2", "00830": "國泰費城半導體",
     "00935": "野村臺灣新科技50", "0052": "富邦科技",
-    # 權值與熱門動態股
+    # 權值與焦點個股
     "2330": "台積電", "2454": "聯發科", "2308": "台達電", "2317": "鴻海",
     "2382": "廣達", "6669": "緯穎", "3231": "緯創", "2357": "華碩",
+    "6770": "力積電", "3624": "光頡", "2305": "全友",
     "3450": "聯鈞", "3017": "奇鋐", "3324": "雙鴻", "2383": "台光電",
     "6274": "台燿", "3131": "弘塑", "3583": "辛耘", "3661": "世芯-KY",
     "3081": "聯亞", "4979": "華星光", "3163": "波若威", "6442": "光聖",
-    "1519": "華城", "1503": "士電", "1513": "中興電", "2609": "陽明",
-    "2615": "萬海", "2603": "長榮", "2881": "富邦金", "2891": "中信金"
+    "1519": "華城", "1503": "士電", "1513": "中興電",
+    "2881": "富邦金", "2891": "中信金"
 }
 
 def get_stock_name(symbol):
     clean = symbol.replace(".TW", "").replace(".TWO", "").strip()
     if clean in TW_STOCK_DICT:
         return TW_STOCK_DICT[clean]
-    # 嘗試從證交所 API 即時查詢中文名稱
     try:
-        import requests
-        r = requests.get(f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{clean}.tw", timeout=2)
+        r = requests.get(f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{clean}.tw|otc_{clean}.tw", timeout=2)
         data = r.json()
         if data.get("msgArray"):
             return data["msgArray"][0].get("n", clean)
@@ -47,36 +45,50 @@ def get_stock_name(symbol):
         pass
     return clean
 
-# 4. 黑名單：隔日沖倒貨與大型無波段標的
-BLACKLIST_SYMBOLS = ["2609", "2615", "2603", "2002", "2881", "2882"]
+# 4. 黑名單：隔日沖倒貨與牛皮股
+BLACKLIST_SYMBOLS = ["2609", "2615", "2603", "2002"]
 
 # 5. 長線固定核心標的池
 LONG_ETF_POOL = ["0050.TW", "006208.TW", "00692.TW", "00878.TW", "00919.TW", "00713.TW"]
 LONG_STOCK_POOL = ["2330.TW", "2454.TW", "2308.TW", "2317.TW", "2881.TW", "2891.TW"]
 SHORT_ETF_POOL = ["00631L.TW", "00670L.TW", "00830.TW", "00935.TW", "0052.TW"]
 
-# 6. 動態抓取台股當日成交金額前 30 大熱門排行
+# 6. 動態抓取上市 + 上櫃成交金額前 30 大排行榜
 def get_dynamic_market_leaders():
-    """從公開市場即時榜單動態取得成交金額最高的前 30 檔股票代碼"""
+    """動態取得上市與上櫃成交金額排行"""
     dynamic_pool = []
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+    
+    # 1. 集中市場（上市）
     try:
-        url = "https://tw.stock.yahoo.com/class-quote?sectorId=all&exchange=TAI&order=volume_amount&sort=desc"
-        headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-        res = requests.get(url, headers=headers, timeout=5)
+        res = requests.get("https://tw.stock.yahoo.com/class-quote?sectorId=all&exchange=TAI&order=volume_amount&sort=desc", headers=headers, timeout=4)
         if res.status_code == 200:
             found = re.findall(r'href="\/quote\/([0-9]{4})\.TW"', res.text)
             for sym in found:
                 if sym not in BLACKLIST_SYMBOLS and f"{sym}.TW" not in dynamic_pool:
                     dynamic_pool.append(f"{sym}.TW")
-                if len(dynamic_pool) >= 25:
+                if len(dynamic_pool) >= 15:
                     break
     except Exception:
         pass
-    
-    # 若網路爬蟲暫時阻擋，使用備用高熱度主流題材池
+
+    # 2. 櫃買市場（上櫃，如光頡、聯亞等）
+    try:
+        res_otc = requests.get("https://tw.stock.yahoo.com/class-quote?sectorId=all&exchange=TWO&order=volume_amount&sort=desc", headers=headers, timeout=4)
+        if res_otc.status_code == 200:
+            found_otc = re.findall(r'href="\/quote\/([0-9]{4})\.TWO"', res_otc.text)
+            for sym in found_otc:
+                if sym not in BLACKLIST_SYMBOLS and f"{sym}.TWO" not in dynamic_pool:
+                    dynamic_pool.append(f"{sym}.TWO")
+                if len(dynamic_pool) >= 30:
+                    break
+    except Exception:
+        pass
+
+    # 若網路爬蟲暫時阻擋，使用備用高熱度主流題材池（含力積電、光頡、全友）
     if not dynamic_pool:
-        fallback = ["3450.TW", "3017.TW", "3324.TW", "2383.TW", "6274.TW", "3131.TW", "3583.TW", "3661.TW", "2382.TW", "6669.TW"]
-        dynamic_pool = [s for s in fallback if s.replace(".TW", "") not in BLACKLIST_SYMBOLS]
+        fallback = ["6770.TW", "3624.TWO", "2305.TW", "3450.TW", "3017.TW", "3324.TW", "2383.TW", "6274.TW", "3131.TW", "3583.TW"]
+        dynamic_pool = [s for s in fallback if s.split(".")[0] not in BLACKLIST_SYMBOLS]
         
     return dynamic_pool
 
@@ -88,7 +100,7 @@ def fetch_data(symbols, strat_type):
         try:
             ticker = yf.Ticker(sym)
             hist = ticker.history(period="3mo")
-            if hist.empty or len(hist) < 20:
+            if hist.empty or len(hist) < 15:
                 continue
             closes = hist["Close"]
             cur_price = round(float(closes.iloc[-1]), 2)
@@ -98,9 +110,7 @@ def fetch_data(symbols, strat_type):
             ma5 = closes.tail(5).mean()
             ma20 = closes.tail(20).mean()
             ma60 = closes.tail(60).mean() if len(closes) >= 60 else ma20
-            clean_sym = sym.replace(".TW", "")
-            
-            # 取得中文名稱
+            clean_sym = sym.replace(".TW", "").replace(".TWO", "")
             name = get_stock_name(sym)
             
             if strat_type == "long_etf":
@@ -127,13 +137,13 @@ def fetch_data(symbols, strat_type):
                     cards.append({"name": name, "sym": clean_sym, "price": cur_price, "chg": change_pct, "timing": timing, "buy_zone": buy_zone, "target": target, "defense": defense, "tip": "短波段持有，獲利達標入袋"})
                     
             elif strat_type == "short_stock":
-                # 動態熱門排行短線篩選：站在月線之上、未過度暴衝 (+0.2% ~ +3.8%)、拒絕追高
-                if cur_price >= ma20 and (-0.8 <= change_pct <= 3.8):
+                # 放寬動能門檻至 +5.8%，納入上市與上櫃熱門強勢股，但避開漲停鎖死追不到的股票
+                if cur_price >= ma20 and (-1.0 <= change_pct <= 5.8):
                     buy_zone = f"{round(cur_price * 0.99, 1)} ~ {round(cur_price * 1.01, 1)}"
                     target = f"{round(cur_price * 1.12, 1)} (+12% 波段獲利點)"
                     defense = f"{round(min(ma20 * 0.97, cur_price * 0.95), 1)} (跌破月線果斷砍單)"
-                    timing = "🔥 熱門成交排行榜強勢股，月線向上且未暴衝，適合零股進出。"
-                    cards.append({"name": name, "sym": clean_sym, "price": cur_price, "chg": change_pct, "timing": timing, "buy_zone": buy_zone, "target": target, "defense": defense, "tip": "每日動態熱錢龍頭，分批切入"})
+                    timing = "🔥 上市/上櫃熱門成交榜動能股，多頭均線向上，適合波段佈局。"
+                    cards.append({"name": name, "sym": clean_sym, "price": cur_price, "chg": change_pct, "timing": timing, "buy_zone": buy_zone, "target": target, "defense": defense, "tip": "動態熱錢榜強勢股，分批進出"})
                     
             if len(cards) >= 4:
                 break
@@ -153,7 +163,7 @@ def format_tg_card(item):
         f"💡 <b>操作指引</b>：{item['tip']}"
     )
 
-# ----------------- Web App 儀表板 HTML 頁面 (高對比黑底清晰樣式) -----------------
+# ----------------- Web App 儀表板 HTML 頁面 -----------------
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -165,7 +175,6 @@ HTML_TEMPLATE = """
     <style>
         body { background: #0b0f19; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; padding-bottom: 50px; }
         .card-custom { background: #161e2e; border: 1px solid #2d3748; border-radius: 14px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
-        /* 強制股票中文名稱呈現純白粗體，高對比不反灰 */
         .stock-title { color: #ffffff !important; font-size: 1.25rem; font-weight: 800; letter-spacing: 0.5px; }
         .stock-code { color: #94a3b8 !important; font-size: 0.95rem; font-weight: normal; margin-left: 4px; }
         .badge-long { background: #059669; color: #ffffff; font-weight: 600; padding: 6px 10px; border-radius: 6px; }
@@ -180,7 +189,7 @@ HTML_TEMPLATE = """
 <body class="container py-4">
     <div class="text-center mb-4">
         <h2 class="fw-bold text-white">🚀 HanStockRadar 投資策略儀表板</h2>
-        <p class="text-info">長線穩健存股 + 短線每日成交榜動態熱錢 | 進出場時機指引</p>
+        <p class="text-info">長線穩健存股 + 上市上櫃動態熱錢榜 | 進出場時機指引</p>
     </div>
 
     <!-- 1. 長線 ETF -->
@@ -243,15 +252,15 @@ HTML_TEMPLATE = """
         {% endfor %}
     </div>
 
-    <!-- 4. 短線 個股（每日動態成交排行） -->
-    <h4 class="section-title">🚀 短線可抱 個股（🔥 每日動態成交熱錢榜過濾）</h4>
+    <!-- 4. 短線 個股（上市櫃動態熱錢榜） -->
+    <h4 class="section-title">🚀 短線可抱 個股（🔥 上市/上櫃動態熱錢榜過濾）</h4>
     <div class="row">
         {% for item in short_stock %}
         <div class="col-md-4">
             <div class="card card-custom p-3">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <span class="stock-title">{{ item.name }}<span class="stock-code">({{ item.sym }})</span></span>
-                    <span class="badge badge-short">動態熱錢榜</span>
+                    <span class="badge badge-short">熱門動態榜</span>
                 </div>
                 <div class="fs-4 mb-2 {{ 'price-up' if item.chg > 0 else 'price-down' }}">{{ item.price }} 元 ({{ '+' if item.chg > 0 else '' }}{{ item.chg }}%)</div>
                 <p class="small mb-1"><span class="info-label">🚦 進場時機：</span><span class="info-value">{{ item.timing }}</span></p>
@@ -314,9 +323,9 @@ def handle_text(message):
         bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=get_main_keyboard())
 
     elif text == "🚀 短線可抱個股":
-        bot.send_message(chat_id, "🔍 正在動態抓取【台股今日成交榜前30大熱門股】，過濾起漲未暴衝標的...", parse_mode="HTML")
+        bot.send_message(chat_id, "🔍 正在動態抓取【上市/上櫃今日成交榜前30大熱門股】，過濾動能未暴衝標的...", parse_mode="HTML")
         cards = fetch_data([], "short_stock")
-        msg = "🚀 <b>【短線可抱 個股（🔥 每日動態熱錢榜）】</b>\n<i>鎖定市場最熱量能、未暴衝追高、零股短波段：</i>\n\n" + "\n\n".join([format_tg_card(c) for c in cards]) if cards else "市場成交榜標的多數已暴衝或破線，無安全進場點。"
+        msg = "🚀 <b>【短線可抱 個股（🔥 上市櫃動態熱錢榜）】</b>\n<i>涵蓋上市櫃人氣主流，波段進出：</i>\n\n" + "\n\n".join([format_tg_card(c) for c in cards]) if cards else "目前市場動態榜標的普遍漲幅過大或回落，無安全進場點。"
         bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=get_main_keyboard())
     else:
         bot.send_message(chat_id, "請點選下方選單按鈕查詢股票策略！", reply_markup=get_main_keyboard())
