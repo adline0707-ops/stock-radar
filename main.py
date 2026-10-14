@@ -12,7 +12,40 @@ app = Flask(__name__)
 TG_TOKEN = os.environ.get("TG_TOKEN", "8681385226:AAEz20o9b9c_Jl04Z0ukUa8IUcFqRai1jyk")
 bot = telebot.TeleBot(TG_TOKEN)
 
-# 3. 四大核心標的池
+# 3. 股票/ETF 中文名稱對照字典（確保絕不只顯示代號）
+STOCK_NAMES = {
+    # 長線 ETF
+    "0050.TW": "元大台灣50",
+    "006208.TW": "富邦台50",
+    "00692.TW": "富邦公司治理",
+    "00878.TW": "國泰永續高股息",
+    "00919.TW": "群益台灣精選高息",
+    "00713.TW": "元大台灣高息低波",
+    # 長線 個股
+    "2330.TW": "台積電",
+    "2454.TW": "聯發科",
+    "2308.TW": "台達電",
+    "2317.TW": "鴻海",
+    "2881.TW": "富邦金",
+    "2891.TW": "中信金",
+    # 短線 ETF
+    "00631L.TW": "元大台灣50正2",
+    "00670L.TW": "富邦NASDAQ正2",
+    "00830.TW": "國泰費城半導體",
+    "00935.TW": "野村臺灣新科技50",
+    "0052.TW": "富邦科技",
+    # 短線 個股
+    "3450.TW": "聯鈞",
+    "3017.TW": "奇鋐",
+    "3324.TW": "雙鴻",
+    "2383.TW": "台光電",
+    "6274.TW": "台燿",
+    "3131.TW": "弘塑",
+    "3583.TW": "辛耘",
+    "3661.TW": "世芯-KY"
+}
+
+# 4. 四大核心標的池
 LONG_ETF_POOL = ["0050.TW", "006208.TW", "00692.TW", "00878.TW", "00919.TW", "00713.TW"]
 LONG_STOCK_POOL = ["2330.TW", "2454.TW", "2308.TW", "2317.TW", "2881.TW", "2891.TW"]
 SHORT_ETF_POOL = ["00631L.TW", "00670L.TW", "00830.TW", "00935.TW", "0052.TW"]
@@ -35,7 +68,9 @@ def fetch_data(symbols, strat_type):
             ma20 = closes.tail(20).mean()
             ma60 = closes.tail(60).mean() if len(closes) >= 60 else ma20
             clean_sym = sym.replace(".TW", "")
-            name = ticker.info.get("shortName", clean_sym)
+            
+            # 優先採用自定義的精確中文名稱
+            name = STOCK_NAMES.get(sym, clean_sym)
             
             if strat_type == "long_etf":
                 buy_zone = f"{round(cur_price * 0.98, 2)} ~ {cur_price}"
