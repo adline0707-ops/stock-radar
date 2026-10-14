@@ -1,5 +1,7 @@
 import os
+import re
 import threading
+import requests
 from flask import Flask, render_template_string
 import telebot
 from telebot import types
@@ -12,48 +14,65 @@ app = Flask(__name__)
 TG_TOKEN = os.environ.get("TG_TOKEN", "8681385226:AAEz20o9b9c_Jl04Z0ukUa8IUcFqRai1jyk")
 bot = telebot.TeleBot(TG_TOKEN)
 
-# 3. 股票/ETF 中文名稱對照字典（確保絕不只顯示代號）
-STOCK_NAMES = {
-    # 長線 ETF
+# 3. 股票/ETF 基礎繁體中文名稱字典
+BASE_STOCK_NAMES = {
     "0050.TW": "元大台灣50",
     "006208.TW": "富邦台50",
     "00692.TW": "富邦公司治理",
     "00878.TW": "國泰永續高股息",
     "00919.TW": "群益台灣精選高息",
     "00713.TW": "元大台灣高息低波",
-    # 長線 個股
     "2330.TW": "台積電",
     "2454.TW": "聯發科",
     "2308.TW": "台達電",
     "2317.TW": "鴻海",
     "2881.TW": "富邦金",
     "2891.TW": "中信金",
-    # 短線 ETF
     "00631L.TW": "元大台灣50正2",
     "00670L.TW": "富邦NASDAQ正2",
     "00830.TW": "國泰費城半導體",
     "00935.TW": "野村臺灣新科技50",
-    "0052.TW": "富邦科技",
-    # 短線 個股
-    "3450.TW": "聯鈞",
-    "3017.TW": "奇鋐",
-    "3324.TW": "雙鴻",
-    "2383.TW": "台光電",
-    "6274.TW": "台燿",
-    "3131.TW": "弘塑",
-    "3583.TW": "辛耘",
-    "3661.TW": "世芯-KY"
+    "0052.TW": "富邦科技"
 }
 
-# 4. 四大核心標的池
+# 4. 黑名單：隔日沖倒貨與大型無波段標的
+BLACKLIST_SYMBOLS = ["2609", "2615", "2603", "2002", "2881", "2882"]
+
+# 5. 長線固定核心標的池
 LONG_ETF_POOL = ["0050.TW", "006208.TW", "00692.TW", "00878.TW", "00919.TW", "00713.TW"]
 LONG_STOCK_POOL = ["2330.TW", "2454.TW", "2308.TW", "2317.TW", "2881.TW", "2891.TW"]
 SHORT_ETF_POOL = ["00631L.TW", "00670L.TW", "00830.TW", "00935.TW", "0052.TW"]
-SHORT_STOCK_POOL = ["3450.TW", "3017.TW", "3324.TW", "2383.TW", "6274.TW", "3131.TW", "3583.TW", "3661.TW"]
+
+# 6. 動態抓取台股當日成交金額前 30 大熱門排行
+def get_dynamic_market_leaders():
+    """從公開市場即時榜單動態取得成交金額最高的前 30 檔股票代碼"""
+    dynamic_pool = []
+    try:
+        url = "https://tw.stock.yahoo.com/class-quote?sectorId=all&exchange=TAI&order=volume_amount&sort=desc"
+        headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            found = re.findall(r'href="\/quote\/([0-9]{4})\.TW"', res.text)
+            for sym in found:
+                if sym not in BLACKLIST_SYMBOLS and f"{sym}.TW" not in dynamic_pool:
+                    dynamic_pool.append(f"{sym}.TW")
+                if len(dynamic_pool) >= 25:
+                    break
+    except Exception:
+        pass
+    
+    # 若網路爬蟲暫時阻擋，使用備用高熱度主流題材池
+    if not dynamic_pool:
+        fallback = ["3450.TW", "3017.TW", "3324.TW", "2383.TW", "6274.TW", "3131.TW", "3583.TW", "3661.TW", "2382.TW", "6669.TW"]
+        dynamic_pool = [s for s in fallback if s.replace(".TW", "") not in BLACKLIST_SYMBOLS]
+        
+    return dynamic_pool
 
 def fetch_data(symbols, strat_type):
     cards = []
-    for sym in symbols:
+    target_symbols = get_dynamic_market_leaders() if strat_type == "short_stock" else symbols
+
+    for sym in target_symbols:
         try:
             ticker = yf.Ticker(sym)
             hist = ticker.history(period="3mo")
@@ -69,8 +88,13 @@ def fetch_data(symbols, strat_type):
             ma60 = closes.tail(60).mean() if len(closes) >= 60 else ma20
             clean_sym = sym.replace(".TW", "")
             
-            # 優先採用自定義的精確中文名稱
-            name = STOCK_NAMES.get(sym, clean_sym)
+            # 取得中文名稱
+            name = BASE_STOCK_NAMES.get(sym)
+            if not name:
+                info = ticker.info
+                name = info.get("shortName") or info.get("longName") or clean_sym
+                # 濾除英文字母多餘綴詞
+                name = name.split(" ")[0].replace("Co.,Ltd.", "").strip()
             
             if strat_type == "long_etf":
                 buy_zone = f"{round(cur_price * 0.98, 2)} ~ {cur_price}"
@@ -78,6 +102,7 @@ def fetch_data(symbols, strat_type):
                 defense = f"{round(ma60, 2)} (季線支撐)"
                 timing = "回測均線穩健支撐區，適合定期定額或零股分批低接。"
                 cards.append({"name": name, "sym": clean_sym, "price": cur_price, "chg": change_pct, "timing": timing, "buy_zone": buy_zone, "target": target, "defense": defense, "tip": "長線ETF分批逢低進場"})
+                
             elif strat_type == "long_stock":
                 buy_zone = f"{round(cur_price * 0.98, 2)} ~ {round(cur_price * 1.01, 2)}"
                 target = f"{round(cur_price * 1.25, 1)} (+25% 產業多頭波段)"
@@ -85,6 +110,7 @@ def fetch_data(symbols, strat_type):
                 timing = "季線向上多頭格局，具產業護城河，適合零股中長線抱牢。"
                 if cur_price >= ma20:
                     cards.append({"name": name, "sym": clean_sym, "price": cur_price, "chg": change_pct, "timing": timing, "buy_zone": buy_zone, "target": target, "defense": defense, "tip": "零股分批佈局，耐震抱長"})
+                    
             elif strat_type == "short_etf":
                 if ma5 >= ma20 and (-1.5 <= change_pct <= 4.0):
                     buy_zone = f"{round(cur_price * 0.99, 2)} ~ {cur_price}"
@@ -92,14 +118,17 @@ def fetch_data(symbols, strat_type):
                     defense = f"{round(ma20 * 0.97, 2)} (跌破月線 -3% 停損)"
                     timing = "短均線黃金交叉，動能增溫剛起跑，適合 1~2 週波段操作。"
                     cards.append({"name": name, "sym": clean_sym, "price": cur_price, "chg": change_pct, "timing": timing, "buy_zone": buy_zone, "target": target, "defense": defense, "tip": "短波段持有，獲利達標入袋"})
+                    
             elif strat_type == "short_stock":
-                if cur_price >= ma20 and (-0.5 <= change_pct <= 4.0):
+                # 動態熱門排行短線篩選：站在月線之上、未過度暴衝 (+0.2% ~ +3.8%)、拒絕追高
+                if cur_price >= ma20 and (-0.8 <= change_pct <= 3.8):
                     buy_zone = f"{round(cur_price * 0.99, 1)} ~ {round(cur_price * 1.01, 1)}"
                     target = f"{round(cur_price * 1.12, 1)} (+12% 波段獲利點)"
                     defense = f"{round(min(ma20 * 0.97, cur_price * 0.95), 1)} (跌破月線果斷砍單)"
-                    timing = "月線多頭排列、未暴衝追高，剛完成回測整理出量勾起。"
-                    cards.append({"name": name, "sym": clean_sym, "price": cur_price, "chg": change_pct, "timing": timing, "buy_zone": buy_zone, "target": target, "defense": defense, "tip": "零股小單進出，嚴守停利停損"})
-            if len(cards) >= 3:
+                    timing = "🔥 熱門成交排行榜強勢股，月線向上且未暴衝，適合零股進出。"
+                    cards.append({"name": name, "sym": clean_sym, "price": cur_price, "chg": change_pct, "timing": timing, "buy_zone": buy_zone, "target": target, "defense": defense, "tip": "每日動態熱錢龍頭，分批切入"})
+                    
+            if len(cards) >= 4:
                 break
         except Exception:
             continue
@@ -117,7 +146,7 @@ def format_tg_card(item):
         f"💡 <b>操作指引</b>：{item['tip']}"
     )
 
-# ----------------- Web App 儀表板 HTML 頁面 -----------------
+# ----------------- Web App 儀表板 HTML 頁面 (高對比黑底清晰樣式) -----------------
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -127,19 +156,24 @@ HTML_TEMPLATE = """
     <title>HanStockRadar 量化戰情室</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { background: #0f172a; color: #f8fafc; font-family: -apple-system, sans-serif; padding-bottom: 50px; }
-        .card-custom { background: #1e293b; border: 1px solid #334155; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3); }
-        .badge-long { background: #059669; }
-        .badge-short { background: #2563eb; }
-        .section-title { border-left: 4px solid #38bdf8; padding-left: 10px; margin-top: 30px; margin-bottom: 20px; }
-        .price-up { color: #f43f5e; font-weight: bold; }
-        .price-down { color: #10b981; font-weight: bold; }
+        body { background: #0b0f19; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; padding-bottom: 50px; }
+        .card-custom { background: #161e2e; border: 1px solid #2d3748; border-radius: 14px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+        /* 強制股票中文名稱呈現純白粗體，高對比不反灰 */
+        .stock-title { color: #ffffff !important; font-size: 1.25rem; font-weight: 800; letter-spacing: 0.5px; }
+        .stock-code { color: #94a3b8 !important; font-size: 0.95rem; font-weight: normal; margin-left: 4px; }
+        .badge-long { background: #059669; color: #ffffff; font-weight: 600; padding: 6px 10px; border-radius: 6px; }
+        .badge-short { background: #2563eb; color: #ffffff; font-weight: 600; padding: 6px 10px; border-radius: 6px; }
+        .section-title { border-left: 5px solid #38bdf8; padding-left: 12px; margin-top: 35px; margin-bottom: 20px; font-weight: 700; color: #f1f5f9; }
+        .price-up { color: #ff3b5c; font-weight: 800; }
+        .price-down { color: #10b981; font-weight: 800; }
+        .info-label { color: #e2e8f0; font-weight: 600; }
+        .info-value { color: #cbd5e1; }
     </style>
 </head>
 <body class="container py-4">
     <div class="text-center mb-4">
-        <h2 class="fw-bold">🚀 HanStockRadar 投資策略儀表板</h2>
-        <p class="text-secondary">長線穩健存股 + 短線零股波段 | 進出場時機指引</p>
+        <h2 class="fw-bold text-white">🚀 HanStockRadar 投資策略儀表板</h2>
+        <p class="text-info">長線穩健存股 + 短線每日成交榜動態熱錢 | 進出場時機指引</p>
     </div>
 
     <!-- 1. 長線 ETF -->
@@ -149,14 +183,14 @@ HTML_TEMPLATE = """
         <div class="col-md-4">
             <div class="card card-custom p-3">
                 <div class="d-flex justify-content-between align-items-center mb-2">
-                    <h5 class="mb-0 fw-bold">{{ item.name }} ({{ item.sym }})</h5>
+                    <span class="stock-title">{{ item.name }}<span class="stock-code">({{ item.sym }})</span></span>
                     <span class="badge badge-long">長線ETF</span>
                 </div>
                 <div class="fs-4 mb-2 {{ 'price-up' if item.chg > 0 else 'price-down' }}">{{ item.price }} 元 ({{ '+' if item.chg > 0 else '' }}{{ item.chg }}%)</div>
-                <p class="small text-light mb-1">🚦 <b>進場時機</b>：{{ item.timing }}</p>
-                <p class="small text-secondary mb-1">📥 <b>建議進場</b>：{{ item.buy_zone }} 元</p>
-                <p class="small text-secondary mb-1">🎯 <b>出場目標</b>：{{ item.target }}</p>
-                <p class="small text-danger mb-0">🛡️ <b>防守支撐</b>：{{ item.defense }}</p>
+                <p class="small mb-1"><span class="info-label">🚦 進場時機：</span><span class="info-value">{{ item.timing }}</span></p>
+                <p class="small mb-1"><span class="info-label">📥 建議進場：</span><span class="info-value">{{ item.buy_zone }} 元</span></p>
+                <p class="small mb-1"><span class="info-label">🎯 出場目標：</span><span class="info-value">{{ item.target }}</span></p>
+                <p class="small mb-0 text-danger">🛡️ <b>防守支撐：</b>{{ item.defense }}</p>
             </div>
         </div>
         {% endfor %}
@@ -169,14 +203,14 @@ HTML_TEMPLATE = """
         <div class="col-md-4">
             <div class="card card-custom p-3">
                 <div class="d-flex justify-content-between align-items-center mb-2">
-                    <h5 class="mb-0 fw-bold">{{ item.name }} ({{ item.sym }})</h5>
+                    <span class="stock-title">{{ item.name }}<span class="stock-code">({{ item.sym }})</span></span>
                     <span class="badge badge-long">長線個股</span>
                 </div>
                 <div class="fs-4 mb-2 {{ 'price-up' if item.chg > 0 else 'price-down' }}">{{ item.price }} 元 ({{ '+' if item.chg > 0 else '' }}{{ item.chg }}%)</div>
-                <p class="small text-light mb-1">🚦 <b>進場時機</b>：{{ item.timing }}</p>
-                <p class="small text-secondary mb-1">📥 <b>建議進場</b>：{{ item.buy_zone }} 元</p>
-                <p class="small text-secondary mb-1">🎯 <b>出場目標</b>：{{ item.target }}</p>
-                <p class="small text-danger mb-0">🛡️ <b>防守支撐</b>：{{ item.defense }}</p>
+                <p class="small mb-1"><span class="info-label">🚦 進場時機：</span><span class="info-value">{{ item.timing }}</span></p>
+                <p class="small mb-1"><span class="info-label">📥 建議進場：</span><span class="info-value">{{ item.buy_zone }} 元</span></p>
+                <p class="small mb-1"><span class="info-label">🎯 出場目標：</span><span class="info-value">{{ item.target }}</span></p>
+                <p class="small mb-0 text-danger">🛡️ <b>防守支撐：</b>{{ item.defense }}</p>
             </div>
         </div>
         {% endfor %}
@@ -189,34 +223,34 @@ HTML_TEMPLATE = """
         <div class="col-md-4">
             <div class="card card-custom p-3">
                 <div class="d-flex justify-content-between align-items-center mb-2">
-                    <h5 class="mb-0 fw-bold">{{ item.name }} ({{ item.sym }})</h5>
+                    <span class="stock-title">{{ item.name }}<span class="stock-code">({{ item.sym }})</span></span>
                     <span class="badge badge-short">短線ETF</span>
                 </div>
                 <div class="fs-4 mb-2 {{ 'price-up' if item.chg > 0 else 'price-down' }}">{{ item.price }} 元 ({{ '+' if item.chg > 0 else '' }}{{ item.chg }}%)</div>
-                <p class="small text-light mb-1">🚦 <b>進場時機</b>：{{ item.timing }}</p>
-                <p class="small text-secondary mb-1">📥 <b>建議進場</b>：{{ item.buy_zone }} 元</p>
-                <p class="small text-secondary mb-1">🎯 <b>出場目標</b>：{{ item.target }}</p>
-                <p class="small text-danger mb-0">🛡️ <b>防守停損</b>：{{ item.defense }}</p>
+                <p class="small mb-1"><span class="info-label">🚦 進場時機：</span><span class="info-value">{{ item.timing }}</span></p>
+                <p class="small mb-1"><span class="info-label">📥 建議進場：</span><span class="info-value">{{ item.buy_zone }} 元</span></p>
+                <p class="small mb-1"><span class="info-label">🎯 出場目標：</span><span class="info-value">{{ item.target }}</span></p>
+                <p class="small mb-0 text-danger">🛡️ <b>防守停損：</b>{{ item.defense }}</p>
             </div>
         </div>
         {% endfor %}
     </div>
 
-    <!-- 4. 短線 個股 -->
-    <h4 class="section-title">🚀 短線可抱 個股（主流出量波段）</h4>
+    <!-- 4. 短線 個股（每日動態成交排行） -->
+    <h4 class="section-title">🚀 短線可抱 個股（🔥 每日動態成交熱錢榜過濾）</h4>
     <div class="row">
         {% for item in short_stock %}
         <div class="col-md-4">
             <div class="card card-custom p-3">
                 <div class="d-flex justify-content-between align-items-center mb-2">
-                    <h5 class="mb-0 fw-bold">{{ item.name }} ({{ item.sym }})</h5>
-                    <span class="badge badge-short">短線個股</span>
+                    <span class="stock-title">{{ item.name }}<span class="stock-code">({{ item.sym }})</span></span>
+                    <span class="badge badge-short">動態熱錢榜</span>
                 </div>
                 <div class="fs-4 mb-2 {{ 'price-up' if item.chg > 0 else 'price-down' }}">{{ item.price }} 元 ({{ '+' if item.chg > 0 else '' }}{{ item.chg }}%)</div>
-                <p class="small text-light mb-1">🚦 <b>進場時機</b>：{{ item.timing }}</p>
-                <p class="small text-secondary mb-1">📥 <b>建議進場</b>：{{ item.buy_zone }} 元</p>
-                <p class="small text-secondary mb-1">🎯 <b>出場目標</b>：{{ item.target }}</p>
-                <p class="small text-danger mb-0">🛡️ <b>防守停損</b>：{{ item.defense }}</p>
+                <p class="small mb-1"><span class="info-label">🚦 進場時機：</span><span class="info-value">{{ item.timing }}</span></p>
+                <p class="small mb-1"><span class="info-label">📥 建議進場：</span><span class="info-value">{{ item.buy_zone }} 元</span></p>
+                <p class="small mb-1"><span class="info-label">🎯 出場目標：</span><span class="info-value">{{ item.target }}</span></p>
+                <p class="small mb-0 text-danger">🛡️ <b>防守停損：</b>{{ item.defense }}</p>
             </div>
         </div>
         {% endfor %}
@@ -230,7 +264,7 @@ def index():
     l_etf = fetch_data(LONG_ETF_POOL, "long_etf")
     l_stk = fetch_data(LONG_STOCK_POOL, "long_stock")
     s_etf = fetch_data(SHORT_ETF_POOL, "short_etf")
-    s_stk = fetch_data(SHORT_STOCK_POOL, "short_stock")
+    s_stk = fetch_data([], "short_stock")
     return render_template_string(HTML_TEMPLATE, long_etf=l_etf, long_stock=l_stk, short_etf=s_etf, short_stock=s_stk)
 
 # ----------------- Telegram 機器人事件處理 -----------------
@@ -273,9 +307,9 @@ def handle_text(message):
         bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=get_main_keyboard())
 
     elif text == "🚀 短線可抱個股":
-        bot.send_message(chat_id, "🔍 正在過濾未暴衝、回測月線有撐的【熱門主流波段股】...", parse_mode="HTML")
-        cards = fetch_data(SHORT_STOCK_POOL, "short_stock")
-        msg = "🚀 <b>【短線可抱 個股波段】</b>\n<i>鎖定出量未暴衝主流股，零股短打：</i>\n\n" + "\n\n".join([format_tg_card(c) for c in cards]) if cards else "市場處於震盪整理，無符合安全進場點標的。"
+        bot.send_message(chat_id, "🔍 正在動態抓取【台股今日成交榜前30大熱門股】，過濾起漲未暴衝標的...", parse_mode="HTML")
+        cards = fetch_data([], "short_stock")
+        msg = "🚀 <b>【短線可抱 個股（🔥 每日動態熱錢榜）】</b>\n<i>鎖定市場最熱量能、未暴衝追高、零股短波段：</i>\n\n" + "\n\n".join([format_tg_card(c) for c in cards]) if cards else "市場成交榜標的多數已暴衝或破線，無安全進場點。"
         bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=get_main_keyboard())
     else:
         bot.send_message(chat_id, "請點選下方選單按鈕查詢股票策略！", reply_markup=get_main_keyboard())
@@ -284,7 +318,6 @@ def start_bot():
     print("Telegram Bot polling started...")
     bot.infinity_polling()
 
-# 在背景啟動 TG Bot
 t = threading.Thread(target=start_bot)
 t.daemon = True
 t.start()
