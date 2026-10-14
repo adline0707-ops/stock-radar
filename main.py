@@ -842,3 +842,95 @@ def check_swing_opportunity(stock_info, hist_data):
     except Exception:
         pass
     return None
+
+
+# ==================== 策略標的池與量化邏輯 ====================
+LONG_ETF_POOL = ["0050.TW", "006208.TW", "00692.TW", "00878.TW", "00919.TW", "00713.TW"]
+LONG_STOCK_POOL = ["2330.TW", "2454.TW", "2308.TW", "2317.TW", "2881.TW", "2891.TW"]
+SHORT_ETF_POOL = ["00631L.TW", "00670L.TW", "00830.TW", "00935.TW", "0052.TW"]
+SHORT_STOCK_POOL = ["3450.TW", "3017.TW", "3324.TW", "2383.TW", "6274.TW", "3131.TW", "3583.TW", "3661.TW"]
+
+def analyze_strategy(symbols, strategy_type):
+    import yfinance as yf
+    results = []
+    
+    for sym in symbols:
+        try:
+            ticker = yf.Ticker(sym)
+            hist = ticker.history(period="6mo")
+            if hist.empty or len(hist) < 30:
+                continue
+                
+            closes = hist["Close"]
+            cur_price = round(float(closes.iloc[-1]), 2)
+            prev_close = round(float(closes.iloc[-2]), 2)
+            change_pct = round(((cur_price - prev_close) / prev_close) * 100, 2)
+            
+            ma5 = closes.tail(5).mean()
+            ma10 = closes.tail(10).mean()
+            ma20 = closes.tail(20).mean()
+            ma60 = closes.tail(60).mean() if len(closes) >= 60 else ma20
+            
+            clean_sym = sym.replace(".TW", "")
+            name = ticker.info.get("shortName", clean_sym)
+            
+            # 1. 長線 ETF
+            if strategy_type == "long_etf":
+                buy_zone = f"{round(cur_price * 0.98, 2)} ~ {cur_price}"
+                target = f"長期複利持有 (領息/正乖離>15%再調節)"
+                defense = f"{round(ma60, 2)} (季線支撐)"
+                timing = "回測均線穩健支撐區，適合定期定額或零股分批低接。"
+                if cur_price >= ma60:
+                    results.append(format_card(name, clean_sym, cur_price, change_pct, timing, buy_zone, target, defense, "長線ETF分批逢低進場"))
+            
+            # 2. 長線 個股
+            elif strategy_type == "long_stock":
+                buy_zone = f"{round(cur_price * 0.98, 2)} ~ {round(cur_price * 1.01, 2)}"
+                target = f"{round(cur_price * 1.25, 1)} (+25% 產業多頭波段)"
+                defense = f"{round(ma60 * 0.97, 1)} (跌破季線轉弱防守)"
+                timing = "季線向上多頭格局，具產業護城河，適合零股中長線抱牢。"
+                if cur_price >= ma20:
+                    results.append(format_card(name, clean_sym, cur_price, change_pct, timing, buy_zone, target, defense, "零股分批佈局，耐震抱長"))
+            
+            # 3. 短線 ETF 波段
+            elif strategy_type == "short_etf":
+                if ma5 >= ma20 and (-1.0 <= change_pct <= 3.5):
+                    buy_zone = f"{round(cur_price * 0.99, 2)} ~ {cur_price}"
+                    target = f"{round(cur_price * 1.08, 2)} (+8% 短線停利)"
+                    defense = f"{round(ma20 * 0.97, 2)} (跌破月線 -3% 停損)"
+                    timing = "短均線黃金交叉，動能增溫剛起跑，適合 1~2 週波段操作。"
+                    results.append(format_card(name, clean_sym, cur_price, change_pct, timing, buy_zone, target, defense, "短波段持有，獲利達標入袋"))
+            
+            # 4. 短線 個股 波段
+            elif strategy_type == "short_stock":
+                if cur_price >= ma20 and ma5 >= ma10 and (-0.5 <= change_pct <= 3.8):
+                    buy_zone = f"{round(cur_price * 0.99, 1)} ~ {round(cur_price * 1.01, 1)}"
+                    target = f"{round(cur_price * 1.12, 1)} (+12% 波段獲利點)"
+                    defense = f"{round(min(ma20 * 0.97, cur_price * 0.95), 1)} (跌破月線果斷砍單)"
+                    timing = "月線多頭排列、未暴衝追高，剛完成回測整理出量勾起。"
+                    results.append(format_card(name, clean_sym, cur_price, change_pct, timing, buy_zone, target, defense, "零股小單進出，嚴守停利停損"))
+                    
+            if len(results) >= 3:
+                break
+        except Exception:
+            continue
+            
+    return results
+
+def format_card(name, sym, price, chg, timing, buy_zone, target, defense, tip):
+    sign = "+" if chg > 0 else ""
+    return (
+        f"📌 <b>{name} ({sym})</b>
+"
+        f"現價：<b>{price}</b> 元 ({sign}{chg}%)
+"
+        f"🚦 <b>進場時機訊號</b>：{timing}
+"
+        f"📥 <b>建議進場區間</b>：{buy_zone} 元
+"
+        f"🎯 <b>出場目標價</b>：{target}
+"
+        f"🛡️ <b>防守停損價</b>：{defense}
+"
+        f"💡 <b>操作指引</b>：{tip}"
+    )
